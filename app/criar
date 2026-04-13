@@ -1,0 +1,72 @@
+--criação snow
+
+/*
+1. A Nova Tabela Dicionário (Com a Coluna Alvo)
+Execute isto no Snowflake. Agora a tabela tem exatamente as 8 colunas que o seu aplicativo (Arquivo 2) tenta inserir:
+*/
+
+CREATE OR REPLACE TABLE DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS (
+    CATEGORIA VARCHAR,
+    PADRAO_REGEX VARCHAR,
+    TIPO_REGRA VARCHAR,
+    PERIODICIDADE VARCHAR,
+    COLUNA_ALVO VARCHAR, 
+    MESES_RETROATIVOS INTEGER DEFAULT 0,
+    DESCRICAO VARCHAR,
+    CONTEXTO_TECNICO VARCHAR,
+    NARRATIVA_CLINICA VARCHAR
+);
+
+/*
+2. O Motor de Lote Limpo (No Snowflake)
+Como a coluna agora existe de verdade, a Procedure de Lote não precisa mais "adivinhar" o alvo pelo texto. Atualize a Procedure de lote rodando isto no Snowflake:
+*/
+CREATE OR REPLACE PROCEDURE DB_GESTAO_SAUDE.SILVER.SP_REPROCESSAR_DNA_COMPLETO()
+RETURNS STRING 
+LANGUAGE JAVASCRIPT 
+EXECUTE AS CALLER AS
+$$
+    try {
+        // 1. Agora incluímos o MESES_RETROATIVOS no SELECT
+        var regras = snowflake.createStatement({
+            sqlText: `SELECT CATEGORIA, COLUNA_ALVO, PADRAO_REGEX, TIPO_REGRA, PERIODICIDADE, MESES_RETROATIVOS 
+                      FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS`
+        }).execute();
+
+        var contagem = 0;
+        while (regras.next()) {
+            var cat = regras.getColumnValue(1);
+            var col = regras.getColumnValue(2); // Sua coluna alvo (ex: SERVICO, GRUPO_ESTATISTICO_G)
+            var reg = regras.getColumnValue(3);
+            var tip = regras.getColumnValue(4);
+            var per = regras.getColumnValue(5) || 'NULL';
+            var mes = regras.getColumnValue(6) || 0; // Pega o valor dos meses (3, 6, 12...)
+            
+            // 2. IMPORTANTE: Chamamos a SP_GESTAO_DNA_DINAMICO com 6 argumentos agora (?, ?, ?, ?, ?, ?)
+            snowflake.createStatement({
+                sqlText: `CALL DB_GESTAO_SAUDE.SILVER.SP_GESTAO_DNA_DINAMICO(?, ?, ?, ?, ?, ?)`,
+                binds: [cat, col, reg, tip, per, mes]
+            }).execute();
+            contagem++;
+        }
+        return "Sucesso: " + contagem + " regras processadas com sucesso na TB_DNA.";
+    } catch (err) { return "Erro no lote: " + err.message; }
+$$;
+
+DROP PROCEDURE IF EXISTS DB_GESTAO_SAUDE.SILVER.SP_GESTAO_DNA_DINAMICO(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR);
+
+
+-- 1. Cria a tabela DNA limpa na camada GOLD com as TRÊS colunas base
+CREATE OR REPLACE TABLE DB_GESTAO_SAUDE.GOLD.TB_DNA (
+    ID_PESSOA VARCHAR,
+    DT_NASCIMENTO DATE,
+    IDADE INTEGER
+);
+
+-- 2. CARGA INICIAL: Preenche a tabela DNA puxando da sua base de USUARIOS (Bronze)
+INSERT INTO DB_GESTAO_SAUDE.GOLD.TB_DNA (ID_PESSOA, DT_NASCIMENTO, IDADE)
+SELECT 
+    ID_PESSOA, 
+    DT_NASCIMENTO, 
+    IDADE 
+FROM FEDERACAO.BRONZE.USUARIOS;
