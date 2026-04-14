@@ -16,7 +16,7 @@ def render_aba_execucao(session):
     st.write("### Janela de Vigencia")
     meses_range = st.slider(
         "Selecione o intervalo de meses retroativos (Inicio e Fim):",
-        0, 60, (0, 3),
+        0, 48, (0, 3),
         help="Exemplo: (0, 3) olha os últimos 3 meses. (4, 24) olha do mês -4 até o -24."
     )
     mes_inicio, mes_fim = meses_range[0], meses_range[1]
@@ -59,6 +59,12 @@ def render_aba_execucao(session):
             )
             
             regex = st.text_input("Padrao Regex (Ex: ONCOLOG|QUIMIO|RADIOTERAP)")
+
+            contexto_tecnico = st.text_input(
+                "Contexto Técnico / Grupo", 
+                placeholder="Ex: ONCOLOGIA, CARDIOLOGIA, DIABETES",
+                help="Agrupador macro desta regra para facilitar a gestão."
+            ).upper().strip()
             
         with c2:
             st.write("Narrativa para a Jornada do Paciente:")
@@ -82,40 +88,53 @@ def render_aba_execucao(session):
         executar = st.form_submit_button("Salvar Regra e Criar Coluna na DNA")
 
     # --- 5. EXECUCAO E SALVAMENTO ---
+    # --- 5. EXECUCAO E SALVAMENTO ---
     if executar:
-        if not categoria or not regex or not narrativa or not alvos_selecionados:
-            st.error("Erro: Preencha a Categoria, as Colunas, o Regex e a Narrativa Clinica.")
+        if not categoria or not regex or not narrativa or not alvos_selecionados or not contexto_tecnico:
+            st.error("Erro: Preencha a Categoria, as Colunas, o Regex, a Narrativa Clínica e o Contexto Técnico.")
         else:
             try:
-                # Protecao contra aspas simples para seguranca SQL
-                cat_segura = categoria.replace("'", "''")
-                regex_segura = regex.replace("'", "''")
-                narrativa_segura = narrativa.replace("'", "''")
-                obs_segura = obs.replace("'", "''")
-                alvos_seguro = alvos_str.replace("'", "''")
-                
-                # A. Insercao no Dicionario (Incluindo colunas da Janela Deslizante e Bio-Filtros)
-                peri_sql = f"'{periodicidade}'" if periodicidade else "NULL"
-                query_insert = f"""
+                # 1. Insercao Segura no Dicionario usando Bind Variables (?)
+                query_insert = """
                     INSERT INTO DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
                     (CATEGORIA, PADRAO_REGEX, TIPO_REGRA, PERIODICIDADE, COLUNA_ALVO, 
-                     MES_INICIO, MESES_RETROATIVOS, SEXO_ALVO, IDADE_MIN, IDADE_MAX, DESCRICAO, NARRATIVA_CLINICA)
-                    VALUES ('{cat_segura}', '{regex_segura}', '{tipo_regra}', {peri_sql}, '{alvos_seguro}', 
-                            {mes_inicio}, {mes_fim}, '{sexo_alvo}', {id_min}, {id_max}, '{obs_segura}', '{narrativa_segura}')
+                     MES_INICIO, MESES_RETROATIVOS, SEXO_ALVO, IDADE_MIN, IDADE_MAX, 
+                     DESCRICAO, NARRATIVA_CLINICA, CONTEXTO_TECNICO)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-                session.sql(query_insert).collect()
                 
-                # B. Chamada do Motor (Procedure atualizada para 10 argumentos)
+                # Prepara as variáveis 
+                alvos_str = ", ".join(alvos_selecionados)
+                peri_val = str(periodicidade) if periodicidade else None
+
+                # Executa com segurança máxima
+                session.sql(query_insert, params=[
+                    categoria, 
+                    regex, 
+                    tipo_regra, 
+                    peri_val, 
+                    alvos_str,
+                    float(mes_inicio), 
+                    float(mes_fim), 
+                    sexo_alvo, 
+                    float(id_min), 
+                    float(id_max), 
+                    obs, 
+                    narrativa, 
+                    contexto_tecnico
+                ]).collect()
+                
+                # 2. Chamada do Motor
                 resultado = session.call("DB_GESTAO_SAUDE.SILVER.SP_GESTAO_DNA_DINAMICO", 
-                             categoria, alvos_str, regex, tipo_regra, str(periodicidade), 
-                             float(mes_inicio), float(mes_fim), sexo_alvo, float(id_min), float(id_max))
+                                         categoria, alvos_str, regex, tipo_regra, peri_val, 
+                                         float(mes_inicio), float(mes_fim), sexo_alvo, float(id_min), float(id_max))
                 
-                # NOVO: Verifica se o banco devolveu um erro na execução
+                # 3. Verificação do retorno
                 if resultado and isinstance(resultado, str) and resultado.startswith("ERRO"):
                     st.error(f"Falha técnica na gravação: {resultado}")
                 else:
                     st.success(f"Regra {categoria} processada na janela de -{mes_inicio} a -{mes_fim} meses.")
-                    st.rerun()
+                    # st.rerun() # Opcional: recarrega a tela limpando o formulário
                 
             except Exception as e:
                 st.error(f"Erro ao processar: {str(e)}")
