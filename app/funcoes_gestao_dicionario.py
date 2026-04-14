@@ -2,6 +2,7 @@
 # Objetivo: Gestão completa do Dicionário (Edição de Regex, Colunas, Tempo, Narrativa e Exclusão).
 
 import streamlit as st
+import pandas as pd
 
 def render_aba_dicionario(session):
     st.subheader("Gestão do Dicionário de Inteligência")
@@ -12,6 +13,7 @@ def render_aba_dicionario(session):
             SELECT 
                 CATEGORIA, 
                 TIPO_REGRA,
+                CONTEXTO_TECNICO,
                 COLUNA_ALVO, 
                 MESES_RETROATIVOS, 
                 PADRAO_REGEX, 
@@ -38,43 +40,57 @@ def render_aba_dicionario(session):
         use_container_width=True, 
         hide_index=True,
         column_config={
-            "CATEGORIA": st.column_config.TextColumn("ID da Flag", disabled=True),
-            "TIPO_REGRA": st.column_config.TextColumn("Tipo de Busca", disabled=True),
-            "COLUNA_ALVO": st.column_config.TextColumn("Colunas (Base)", width="medium"),
-            "MESES_RETROATIVOS": st.column_config.NumberColumn("Janela (Meses)", width="small", help="0 = Histórico Total"),
-            "PADRAO_REGEX": st.column_config.TextColumn("Regex / Padrão", width="medium"),
-            "NARRATIVA_CLINICA": st.column_config.TextColumn("Narrativa da Jornada", width="large"),
-            "DESCRICAO": st.column_config.TextColumn("Registro Interno")
+            "CATEGORIA": st.column_config.TextColumn("CATEGORIA", disabled=True),
+            "TIPO_REGRA": st.column_config.TextColumn("TIPO REGRA", disabled=True),
+            "CONTEXTO_TECNICO": st.column_config.TextColumn("CONTEXTO TECNICO", width="medium"),
+            "COLUNA_ALVO": st.column_config.TextColumn("CAMPO DE BUSCA (COLUNA_ALVO)", width="medium"),
+            "MESES_RETROATIVOS": st.column_config.NumberColumn("JANELA (MESES_RETROATIVOS)", width="small", help="0 = Histórico Total"),
+            "PADRAO_REGEX": st.column_config.TextColumn("PADRÃO DE BUSCA", width="medium"),
+            "NARRATIVA_CLINICA": st.column_config.TextColumn("NARRATIVA CLINICA", width="large"),
+            "DESCRICAO": st.column_config.TextColumn("DESCRICAO")
         }
     )
     
     col_save, _ = st.columns([1, 3])
     with col_save:
-        if st.button("Salvar Alterações"):
+        if st.button("Salvar Alterações", type="primary"):
             try:
-                for index, row in df_editado.iterrows():
-                    # Proteção contra aspas simples para não quebrar o SQL
-                    reg_seguro = str(row['PADRAO_REGEX']).replace("'", "''")
-                    nar_segura = str(row['NARRATIVA_CLINICA']).replace("'", "''")
-                    obs_segura = str(row['DESCRICAO']).replace("'", "''")
-                    col_segura = str(row['COLUNA_ALVO']).replace("'", "''")
+                # --- A MÁGICA ESTÁ AQUI ---
+                # Comparamos o original com o editado e pegamos apenas as linhas que mudaram
+                # O .any(axis=1) verifica se houve mudança em QUALQUER coluna daquela linha
+                mudancas = df_editado[df_dic.ne(df_editado).any(axis=1)]
+
+                if mudancas.empty:
+                    st.warning("Nenhuma alteração detectada.")
+                else:
+                    for index, row in mudancas.iterrows():
+                        # O SQL só roda para as linhas dentro de 'mudancas'
+                        query_update = """
+                            UPDATE DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
+                            SET PADRAO_REGEX = ?,
+                                NARRATIVA_CLINICA = ?,
+                                DESCRICAO = ?,
+                                COLUNA_ALVO = ?,
+                                MESES_RETROATIVOS = ?,
+                                CONTEXTO_TECNICO = ? 
+                            WHERE CATEGORIA = ?
+                        """
+                        
+                        session.sql(query_update, params=[
+                            str(row['PADRAO_REGEX']),
+                            str(row['NARRATIVA_CLINICA']),
+                            str(row['DESCRICAO']),
+                            str(row['COLUNA_ALVO']),
+                            int(row['MESES_RETROATIVOS']),
+                            str(row['CONTEXTO_TECNICO']) if pd.notna(row['CONTEXTO_TECNICO']) else "",
+                            str(row['CATEGORIA'])
+                        ]).collect()
                     
-                    query_update = f"""
-                        UPDATE DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
-                        SET PADRAO_REGEX = '{reg_seguro}',
-                            NARRATIVA_CLINICA = '{nar_segura}',
-                            DESCRICAO = '{obs_segura}',
-                            COLUNA_ALVO = '{col_segura}',
-                            MESES_RETROATIVOS = {int(row['MESES_RETROATIVOS'])}
-                        WHERE CATEGORIA = '{row['CATEGORIA']}'
-                    """
-                    session.sql(query_update).collect()
-                
-                st.success("Dicionário atualizado com sucesso!")
-                st.balloons()
+                    # --- AGORA FORA DO LOOP ---
+                    st.success(f"Sucesso! {len(mudancas)} regra(s) atualizada(s).")
+                    st.rerun() # Recarrega para o original virar o novo 'editado'
             except Exception as e:
                 st.error(f"Erro ao atualizar: {str(e)}")
-
     st.divider()
 
     # --- PARTE 2: EXCLUSÃO ---
