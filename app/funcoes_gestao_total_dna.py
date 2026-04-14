@@ -35,8 +35,11 @@ def render_aba_gestao_total(session):
                 try:
                     # Chama a Procedure de Lote
                     resultado = session.call("DB_GESTAO_SAUDE.SILVER.SP_REPROCESSAR_DNA_COMPLETO")
+                    
+                    # Feedback profissional: Sucesso sem balões
                     st.success(f"FINALIZADO: {resultado}")
-                    st.balloons() # Feedback visual de sucesso
+                    st.toast("Base atualizada com sucesso!", icon="✅") 
+                    
                 except Exception as e:
                     st.error(f"Erro Crítico no Processamento: {str(e)}")
     else:
@@ -46,5 +49,8 @@ def render_aba_gestao_total(session):
     st.subheader("Auditoria de Colunas")
     st.write("Verifique abaixo se as colunas criadas no banco coincidem com o seu dicionário.")
     
-    cols_dna = session.table("DB_GESTAO_SAUDE.GOLD.TB_DNA").columns
-    st.write(f"Colunas presentes na Gold: {', '.join([c for c in cols_dna if c.startswith('FL_')])}")
+    try:
+        cols_dna = session.table("DB_GESTAO_SAUDE.GOLD.TB_DNA").columns
+        st.write(f"Colunas presentes na Gold: {', '.join([c for c in cols_dna if c.startswith('FL_')])}")
+    except Exception as e:
+        st.error("Erro ao carregar colunas da tabela de auditoria.")
