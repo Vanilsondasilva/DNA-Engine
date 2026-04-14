@@ -1,3 +1,6 @@
+# Nome no Repositorio: environment.yml
+# Objetivo: Variaveis e dependências.
+
 name: app_environment
 channels:
   - snowflake
@@ -5,3 +8,5 @@ dependencies:
   - python=3.11.*
   - snowflake-snowpark-python=
   - streamlit=
+  - pandas=
+  # - plotly
