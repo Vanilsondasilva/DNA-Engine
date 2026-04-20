@@ -72,7 +72,8 @@ def render_aba_dicionario(session):
                                 DESCRICAO = ?,
                                 COLUNA_ALVO = ?,
                                 MESES_RETROATIVOS = ?,
-                                CONTEXTO_TECNICO = ? 
+                                CONTEXTO_TECNICO = ?,
+                                DT_ATUALIZACAO = CURRENT_TIMESTAMP()
                             WHERE CATEGORIA = ?
                         """
                         
@@ -110,7 +111,13 @@ def render_aba_dicionario(session):
         # Botão de confirmação específico para exclusão
         if st.button(f"Confirmar Exclusão de {regra_para_deletar}", type="secondary"):
             try:
-                session.sql(f"DELETE FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS WHERE CATEGORIA = '{regra_para_deletar}'").collect()
+                # 1. Trocamos o f-string por uma query com parâmetro (?)
+                query_delete = "DELETE FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS WHERE CATEGORIA = ?"
+                
+                # 2. Executamos passando a variável de forma segura na lista params
+                session.sql(query_delete, params=[regra_para_deletar]).collect()
+                # -------------------------------
+                
                 st.error(f"Regra '{regra_para_deletar}' removida com sucesso!")
                 st.rerun() # Recarrega a página para atualizar a tabela
             except Exception as e:
