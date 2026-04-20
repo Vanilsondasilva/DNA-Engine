@@ -2,6 +2,7 @@
 # Objetivo: Criar regras com Janela Deslizante (VIGENCIA), Bio-Filtros e Multiplas Colunas.
 
 import streamlit as st
+from funcoes_gestao_total_dna import reprocessar_dna_motor_python
 
 def render_aba_execucao(session):
     st.subheader("Configuracao de Regra de Inteligencia")
@@ -126,10 +127,8 @@ def render_aba_execucao(session):
                     contexto_tecnico
                 ]).collect()
                 
-                # 2. Chamada do Motor
-                resultado = session.call("DB_GESTAO_SAUDE.SILVER.SP_GESTAO_DNA_DINAMICO", 
-                                         categoria, alvos_str, regex, tipo_regra, peri_val, 
-                                         float(mes_inicio), float(mes_fim), sexo_alvo, float(id_min), float(id_max))
+                # 2. Chamada do Motor Universal Python (Passando a categoria criada)
+                resultado = reprocessar_dna_motor_python(session, categoria_alvo=categoria)
                 
                 # 3. Verificação do retorno
                 if resultado and isinstance(resultado, str) and resultado.startswith("ERRO"):
