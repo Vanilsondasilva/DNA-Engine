@@ -7,7 +7,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 1. MOTOR UNIVERSAL (Lote ou Regra Única)
+# 1. MOTOR UNIVERSAL - FASE 1 (Regras Simples)
 # ==========================================
 def reprocessar_dna_motor_python(session, categoria_alvo=None):
     """
@@ -15,45 +15,35 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
     Se categoria_alvo for None, reprocessa TUDO. Se tiver o nome, reprocessa só aquela regra.
     """
     try:
-        # 1. Busca as regras (Todas ou apenas a que acabou de ser criada)
         if categoria_alvo:
             df_regras = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS WHERE CATEGORIA = ?", params=[categoria_alvo]).to_pandas()
         else:
             df_regras = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").to_pandas()
         
         if df_regras.empty:
-            return "Nenhuma regra encontrada para processar."
+            return "Nenhuma regra simples encontrada para processar."
 
-        # 2. Pega a Data Âncora
         data_ancora = session.sql("SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2").collect()[0][0]
 
-        # Listas para guardar nossas construções dinâmicas
         colunas_para_criar = []
         cases_sql = []
         updates_sql = []
 
-        # 3. Loop no PYTHON (Rápido) para montar as regras
         for _, regra in df_regras.iterrows():
             
             # --- BLINDAGEM E SANITIZAÇÃO ---
             cat = str(regra['CATEGORIA']).upper().strip()
             nome_col = cat if cat.startswith('FL_') else f"FL_{cat}"
-            # Remove qualquer coisa que não seja Letra, Número ou Underline:
             nome_col = re.sub(r'[^A-Z0-9_]', '', nome_col) 
-            
-            # Protege aspas simples no regex
             regex = str(regra['PADRAO_REGEX']).replace("'", "''") 
-            
-            # Limpa o nome das colunas também (evita SQL injection na coluna)
             colunas_brutas = str(regra['COLUNA_ALVO']).split(',')
             colunas_busca = [re.sub(r'[^A-Z0-9_]', '', col.strip().upper()) for col in colunas_brutas if col.strip()]
-            # ----------------------------------------------------------------
             
             tipo = str(regra['TIPO_REGRA']).upper()
             peri = str(regra['PERIODICIDADE']).upper() if pd.notna(regra['PERIODICIDADE']) else 'NULL'
-            
             mes_ini = int(regra['MES_INICIO']) if pd.notna(regra['MES_INICIO']) else 0
             mes_fim = int(regra['MESES_RETROATIVOS']) if pd.notna(regra['MESES_RETROATIVOS']) else 0
+            limiar_volume = int(regra['LIMIAR_VOLUME']) if 'LIMIAR_VOLUME' in regra and pd.notna(regra['LIMIAR_VOLUME']) else 1
             sexo = str(regra['SEXO_ALVO'])
             id_min = int(regra['IDADE_MIN']) if pd.notna(regra['IDADE_MIN']) else 0
             id_max = int(regra['IDADE_MAX']) if pd.notna(regra['IDADE_MAX']) else 200
@@ -77,6 +67,11 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
                 else: # ANUAL
                     filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= 12"
                     condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
+            
+            elif tipo == 'VOLUME': 
+                filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
+                condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN F.NUMERO_GUIA END) >= {limiar_volume} THEN 1 ELSE 0 END"
+            
             else: # VIGENCIA
                 filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
                 condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
@@ -85,15 +80,12 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
             cases_sql.append(f"{condicao_agrupada} AS {nome_col}")
             updates_sql.append(f"{nome_col} = DADOS_PROCESSADOS.{nome_col}")
 
-        # 4. Executa a criação de colunas
         if colunas_para_criar:
             session.sql(f"ALTER TABLE DB_GESTAO_SAUDE.GOLD.TB_DNA {', '.join(colunas_para_criar)}").collect()
 
-        # 5. Zera todas as flags na tabela DNA (preparação para o UPDATE)
         zerar_colunas = ", ".join([f"{col.split('=')[0].strip()} = 0" for col in updates_sql])
         session.sql(f"UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA SET {zerar_colunas}").collect()
 
-        # 6. A QUERY MESTRA
         query_mestra = f"""
             WITH DADOS_PROCESSADOS AS (
                 SELECT 
@@ -110,53 +102,195 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
             WHERE CAST(DNA.ID_PESSOA AS VARCHAR) = CAST(DADOS_PROCESSADOS.ID_PESSOA AS VARCHAR)
         """
 
-        # Executa o processamento pesado no banco
         session.sql(query_mestra).collect()
 
-        return f"Sucesso! {len(df_regras)} regras processadas em uma única varredura."
+        return f"Sucesso! {len(df_regras)} regras simples processadas."
 
     except Exception as e:
-        raise Exception(str(e)) # Repassa o erro para o Streamlit tratar
+        raise Exception(str(e))
 
 
 # ==========================================
-# 2. INTERFACE (SALA DE CONTROLE)
+# 2. MOTOR DE SEGUNDA CAMADA (Regras Compostas)
+# ==========================================
+def reprocessar_dna_motor_composto(session, categoria_alvo=None):
+    """
+    Motor Fase 2: Avalia a coexistência temporal de eventos. 
+    Cruza as regras OBRIGATÓRIAS vs ALTERNATIVAS validando a janela em dias ou número da guia.
+    """
+    try:
+        # Tenta buscar as regras compostas. Se a tabela não existir ou estiver vazia, ignora a Fase 2.
+        try:
+            if categoria_alvo:
+                df_comp = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_COMPOSTO WHERE FL_ATIVO = 1 AND CATEGORIA_COMPOSTA = ?", params=[categoria_alvo]).to_pandas()
+            else:
+                df_comp = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_COMPOSTO WHERE FL_ATIVO = 1").to_pandas()
+        except:
+            return "Nenhuma regra composta configurada (Tabela vazia ou ausente)."
+
+        if df_comp.empty:
+            return "Nenhuma regra composta encontrada para processar."
+
+        # Busca o dicionário de regras simples para "pegar emprestado" os Regex delas
+        df_simp = session.sql("SELECT CATEGORIA, PADRAO_REGEX, COLUNA_ALVO FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").to_pandas()
+        dict_simples = {row['CATEGORIA']: row for _, row in df_simp.iterrows()}
+
+        data_ancora = session.sql("SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2").collect()[0][0]
+
+        # Função auxiliar para gerar o bloco de REGEX de uma lista de flags (Ex: FL_CREATININA, FL_UREIA)
+        def build_regex_clause(lista_categorias_str, alias):
+            if not lista_categorias_str or pd.isna(lista_categorias_str): return "1=0"
+            cats = [c.strip() for c in str(lista_categorias_str).split(',') if c.strip()]
+            conds = []
+            for cat in cats:
+                if cat in dict_simples:
+                    regex = str(dict_simples[cat]['PADRAO_REGEX']).replace("'", "''")
+                    cols = str(dict_simples[cat]['COLUNA_ALVO']).split(',')
+                    for c in cols:
+                        c = re.sub(r'[^A-Z0-9_]', '', c.strip().upper())
+                        conds.append(f"REGEXP_LIKE({alias}.{c}, '{regex}', 'i')")
+            return "(" + " OR ".join(conds) + ")" if conds else "1=0"
+
+        ctes = []
+        cases_sql = []
+        updates_sql = []
+        colunas_para_criar = []
+        nomes_compostas = []
+
+        # Construindo as Queries (Self-Joins) para cada regra composta
+        for _, regra in df_comp.iterrows():
+            cat_comp = str(regra['CATEGORIA_COMPOSTA']).upper().strip()
+            cat_comp = cat_comp if cat_comp.startswith('FL_') else f"FL_{cat_comp}"
+            cat_comp = re.sub(r'[^A-Z0-9_]', '', cat_comp)
+            nomes_compostas.append(cat_comp)
+
+            # Lógica
+            obrig_clause = build_regex_clause(regra['REGRAS_OBRIGATORIAS'], 'B')
+            alt_clause = build_regex_clause(regra['REGRAS_ALTERNATIVAS'], 'C')
+            exc_clause = build_regex_clause(regra['REGRAS_EXCLUSAO'], 'E')
+
+            has_alt = bool(str(regra['REGRAS_ALTERNATIVAS']).strip())
+            has_exc = bool(str(regra['REGRAS_EXCLUSAO']).strip())
+
+            # Tempo e Perfil
+            janela = int(regra['JANELA_COOCORRENCIA_DIAS'])
+            ordem = int(regra['EXIGE_ORDEM_CRONOLOGICA'])
+            mes_ini, mes_fim = float(regra['MES_INICIO']), float(regra['MESES_RETROATIVOS'])
+            sexo, id_min, id_max = str(regra['SEXO_ALVO']), float(regra['IDADE_MIN']), float(regra['IDADE_MAX'])
+
+            filtro_perfil = f"(M.SEXO = '{sexo}' OR '{sexo}' = 'Ambos') AND (M.IDADE BETWEEN {id_min} AND {id_max} OR M.IDADE IS NULL)"
+            filtro_tempo_B = f"DATEDIFF('month', B.DATA_ATENDIMENTO, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
+            filtro_tempo_C = f"DATEDIFF('month', C.DATA_ATENDIMENTO, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
+
+            # Regra de Co-ocorrência (Mesma Guia OU Janela de Dias)
+            if janela == 0:
+                join_cond = "B.NUMERO_GUIA = C.NUMERO_GUIA"
+            else:
+                if ordem == 1: # Obrigatório tem que ocorrer ANTES ou no mesmo dia do Alternativo
+                    join_cond = f"(B.NUMERO_GUIA = C.NUMERO_GUIA OR (DATEDIFF('day', B.DATA_ATENDIMENTO, C.DATA_ATENDIMENTO) BETWEEN 0 AND {janela}))"
+                else: # Podem ocorrer em qualquer ordem dentro da janela
+                    join_cond = f"(B.NUMERO_GUIA = C.NUMERO_GUIA OR ABS(DATEDIFF('day', B.DATA_ATENDIMENTO, C.DATA_ATENDIMENTO)) <= {janela})"
+
+            # Montagem dinâmica do JOIN apenas se houver Regras Alternativas
+            join_c = f"INNER JOIN DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 C ON B.ID_USUARIO = C.ID_USUARIO AND {join_cond} AND {alt_clause} AND {filtro_tempo_C}" if has_alt else ""
+            where_exc = f"AND NOT EXISTS (SELECT 1 FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 E WHERE E.ID_USUARIO = B.ID_USUARIO AND {exc_clause})" if has_exc else ""
+
+            # CTE Específica da Regra
+            cte_sql = f"""
+            CTE_{cat_comp} AS (
+                SELECT DISTINCT B.ID_USUARIO
+                FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 B
+                INNER JOIN DB_GESTAO_SAUDE.SILVER.TB_DIM_USUARIO M ON B.ID_USUARIO = M.ID_USUARIO
+                {join_c}
+                WHERE {obrig_clause} AND {filtro_tempo_B} AND {filtro_perfil}
+                {where_exc}
+            )
+            """
+            ctes.append(cte_sql)
+            cases_sql.append(f"CASE WHEN CTE_{cat_comp}.ID_USUARIO IS NOT NULL THEN 1 ELSE 0 END AS {cat_comp}")
+            updates_sql.append(f"{cat_comp} = DADOS_PROCESSADOS.{cat_comp}")
+            colunas_para_criar.append(f"ADD COLUMN IF NOT EXISTS {cat_comp} INTEGER DEFAULT 0")
+
+        if not ctes:
+            return "Nenhuma regra composta válida para processar."
+
+        # Cria as colunas no banco se for uma regra composta nova
+        session.sql(f"ALTER TABLE DB_GESTAO_SAUDE.GOLD.TB_DNA {', '.join(colunas_para_criar)}").collect()
+
+        # Zera as flags compostas atuais
+        zerar_colunas = ", ".join([f"{col.split('=')[0].strip()} = 0" for col in updates_sql])
+        session.sql(f"UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA SET {zerar_colunas}").collect()
+
+        # Junta todas as CTEs num mega cruzamento otimizado
+        with_clause = "WITH " + ",\n".join(ctes)
+        joins_clause = "\n".join([f"LEFT JOIN CTE_{c} ON M.ID_USUARIO = CTE_{c}.ID_USUARIO" for c in nomes_compostas])
+
+        query_mestra_composta = f"""
+            {with_clause},
+            DADOS_PROCESSADOS AS (
+                SELECT 
+                    M.ID_PESSOA,
+                    {', '.join(cases_sql)}
+                FROM DB_GESTAO_SAUDE.SILVER.TB_DIM_USUARIO M
+                {joins_clause}
+            )
+            UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA DNA
+            SET {', '.join(updates_sql)}
+            FROM DADOS_PROCESSADOS
+            WHERE CAST(DNA.ID_PESSOA AS VARCHAR) = CAST(DADOS_PROCESSADOS.ID_PESSOA AS VARCHAR)
+        """
+
+        session.sql(query_mestra_composta).collect()
+
+        return f"Sucesso! {len(df_comp)} regras compostas (Protocolos Avançados) processadas."
+
+    except Exception as e:
+        raise Exception(f"Erro na Fase 2 (Regras Compostas): {str(e)}")
+
+
+# ==========================================
+# 3. INTERFACE (SALA DE CONTROLE)
 # ==========================================
 def render_aba_gestao_total(session):
     st.markdown("### Sala de Controle - Processamento em Lote")
     
-    # Painel de Status
     try:
         total_regras = session.sql("SELECT COUNT(*) FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").collect()[0][0]
-        st.info(f"O Dicionário possui atualmente {total_regras} regras cadastradas.")
+        try:
+            total_compostas = session.sql("SELECT COUNT(*) FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_COMPOSTO WHERE FL_ATIVO = 1").collect()[0][0]
+        except:
+            total_compostas = 0
+            
+        st.info(f"O Dicionário possui atualmente **{total_regras}** regras simples e **{total_compostas}** regras compostas ativas.")
     except:
-        st.error("Não foi possível acessar o dicionário de regras.")
+        st.error("Não foi possível acessar os dicionários de inteligência.")
         return
 
-    # Avisos de Segurança
     st.error("""
         **ATENÇÃO: OPERAÇÃO CRÍTICA**
         Ao clicar no botão abaixo, o sistema irá:
-        1. Percorrer TODAS as regras salvas no dicionário.
-        2. Resetar os valores atuais na tabela GOLD.TB_DNA (zerar os flags).
-        3. Recalcular cada regra para toda a base de beneficiários utilizando o Motor Single-Pass.
-        
-        Esta operação será processada de forma simultânea e unificada.
+        1. Percorrer TODAS as regras (Simples e Compostas).
+        2. Resetar os valores atuais na tabela GOLD.TB_DNA.
+        3. Executar a **Fase 1 (Motor Simples)** para base de dados.
+        4. Executar a **Fase 2 (Motor de Co-ocorrência)** cruzando os eventos.
     """)
 
-    # Trava de Segurança
     confirmacao = st.checkbox("Eu entendo que esta operação atualizará toda a base DNA e confirmo o reprocessamento.")
 
     if confirmacao:
         if st.button("🔄 INICIAR ATUALIZAÇÃO GLOBAL DO DNA", type="primary", use_container_width=True):
-            with st.spinner("Executando motor unificado de lote... Acelerando o processamento."):
+            with st.spinner("Executando motor unificado... Fase 1 (Regras Simples) em andamento."):
                 try:
-                    # Chamada do Motor em Python atualizado
-                    resultado = reprocessar_dna_motor_python(session)
+                    # Roda Fase 1
+                    res_fase1 = reprocessar_dna_motor_python(session)
+                    st.success(f"Fase 1 concluída: {res_fase1}")
                     
-                    # Feedback profissional: Sucesso
-                    st.success(f"FINALIZADO: {resultado}")
-                    st.toast("Base atualizada com sucesso!", icon="✅") 
+                    with st.spinner("Executando cruzamento de dados... Fase 2 (Regras Compostas) em andamento."):
+                        # Roda Fase 2
+                        res_fase2 = reprocessar_dna_motor_composto(session)
+                        st.success(f"Fase 2 concluída: {res_fase2}")
+                    
+                    st.toast("Base DNA atualizada com sucesso!", icon="✅") 
                     
                 except Exception as e:
                     st.error(f"Erro Crítico no Processamento: {str(e)}")
@@ -165,10 +299,10 @@ def render_aba_gestao_total(session):
 
     st.divider()
     st.subheader("Auditoria de Colunas")
-    st.write("Verifique abaixo se as colunas criadas no banco coincidem com o seu dicionário.")
+    st.write("Verifique abaixo se as colunas criadas coincidem com os seus dicionários.")
     
     try:
         cols_dna = session.table("DB_GESTAO_SAUDE.GOLD.TB_DNA").columns
-        st.write(f"Colunas presentes na Gold: {', '.join([c for c in cols_dna if c.startswith('FL_')])}")
+        st.write(f"Colunas ativas na Gold: {', '.join([c for c in cols_dna if c.startswith('FL_')])}")
     except Exception as e:
         st.error("Erro ao carregar colunas da tabela de auditoria.")
