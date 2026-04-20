@@ -88,7 +88,6 @@ def render_aba_execucao(session):
         executar = st.form_submit_button("Salvar Regra e Criar Coluna na DNA")
 
     # --- 5. EXECUCAO E SALVAMENTO ---
-    # --- 5. EXECUCAO E SALVAMENTO ---
     if executar:
         if not categoria or not regex or not narrativa or not alvos_selecionados or not contexto_tecnico:
             st.error("Erro: Preencha a Categoria, as Colunas, o Regex, a Narrativa Clínica e o Contexto Técnico.")
@@ -99,8 +98,11 @@ def render_aba_execucao(session):
                     INSERT INTO DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
                     (CATEGORIA, PADRAO_REGEX, TIPO_REGRA, PERIODICIDADE, COLUNA_ALVO, 
                      MES_INICIO, MESES_RETROATIVOS, SEXO_ALVO, IDADE_MIN, IDADE_MAX, 
-                     DESCRICAO, NARRATIVA_CLINICA, CONTEXTO_TECNICO)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     DESCRICAO, NARRATIVA_CLINICA, CONTEXTO_TECNICO, DT_CRIACAO, 
+                     DT_ATUALIZACAO) VALUES (
+                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                     CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()
+                     )
                 """
                 
                 # Prepara as variáveis 
