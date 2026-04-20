@@ -4,21 +4,25 @@
 
 import streamlit as st
 import pandas as pd
+import re
 
 # ==========================================
-# 1. NOVO MOTOR DE PROCESSAMENTO (Single-Pass)
+# 1. MOTOR UNIVERSAL (Lote ou Regra Única)
 # ==========================================
-def reprocessar_dna_lote_otimizado(session):
+def reprocessar_dna_motor_python(session, categoria_alvo=None):
     """
-    Motor Python/Snowpark otimizado. 
-    Lê o dicionário e constrói uma única query para processar TODAS as regras em uma única varredura.
+    Motor Python/Snowpark otimizado e blindado. 
+    Se categoria_alvo for None, reprocessa TUDO. Se tiver o nome, reprocessa só aquela regra.
     """
     try:
-        # 1. Pega todas as regras do Dicionário
-        df_regras = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").to_pandas()
+        # 1. Busca as regras (Todas ou apenas a que acabou de ser criada)
+        if categoria_alvo:
+            df_regras = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS WHERE CATEGORIA = ?", params=[categoria_alvo]).to_pandas()
+        else:
+            df_regras = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").to_pandas()
         
         if df_regras.empty:
-            return "Nenhuma regra no dicionário."
+            return "Nenhuma regra encontrada para processar."
 
         # 2. Pega a Data Âncora
         data_ancora = session.sql("SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2").collect()[0][0]
@@ -30,14 +34,21 @@ def reprocessar_dna_lote_otimizado(session):
 
         # 3. Loop no PYTHON (Rápido) para montar as regras
         for _, regra in df_regras.iterrows():
-            # Tratamento de variáveis
-            cat = regra['CATEGORIA'].upper().strip()
+            
+            # --- BLINDAGEM E SANITIZAÇÃO ---
+            cat = str(regra['CATEGORIA']).upper().strip()
             nome_col = cat if cat.startswith('FL_') else f"FL_{cat}"
+            # Remove qualquer coisa que não seja Letra, Número ou Underline:
+            nome_col = re.sub(r'[^A-Z0-9_]', '', nome_col) 
             
             # Protege aspas simples no regex
             regex = str(regra['PADRAO_REGEX']).replace("'", "''") 
             
-            colunas_busca = str(regra['COLUNA_ALVO']).split(',')
+            # Limpa o nome das colunas também (evita SQL injection na coluna)
+            colunas_brutas = str(regra['COLUNA_ALVO']).split(',')
+            colunas_busca = [re.sub(r'[^A-Z0-9_]', '', col.strip().upper()) for col in colunas_brutas if col.strip()]
+            # ----------------------------------------------------------------
+            
             tipo = str(regra['TIPO_REGRA']).upper()
             peri = str(regra['PERIODICIDADE']).upper() if pd.notna(regra['PERIODICIDADE']) else 'NULL'
             
@@ -48,42 +59,33 @@ def reprocessar_dna_lote_otimizado(session):
             id_max = int(regra['IDADE_MAX']) if pd.notna(regra['IDADE_MAX']) else 200
 
             # --- MONTANDO AS CONDIÇÕES BASE ---
-            # A) Regras de Busca (Regex)
-            condicoes_regex = [f"REGEXP_LIKE(F.{col.strip()}, '{regex}', 'i')" for col in colunas_busca if col.strip()]
+            condicoes_regex = [f"REGEXP_LIKE(F.{col}, '{regex}', 'i')" for col in colunas_busca]
             clausula_busca = "(" + " OR ".join(condicoes_regex) + ")"
-
-            # B) Regras de Perfil (Sexo e Idade)
             filtro_perfil = f"(M.SEXO = '{sexo}' OR '{sexo}' = 'Ambos') AND (M.IDADE BETWEEN {id_min} AND {id_max} OR M.IDADE IS NULL)"
             
-            # C) Regras de Tempo
             if tipo == 'FREQUENCIA':
                 limite_freq = mes_fim if mes_fim > 0 else 4
                 if peri == 'MENSAL':
                     filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= {limite_freq}"
                     condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.DATA_ATENDIMENTO, 'MONTH') END) >= 3 THEN 1 ELSE 0 END"
-                
                 elif peri == 'TRIMESTRAL':
                     filtro_tempo = f"DATEDIFF('quarter', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= {limite_freq}"
                     condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.DATA_ATENDIMENTO, 'QUARTER') END) >= 3 THEN 1 ELSE 0 END"
-                
                 elif peri == 'SEMESTRAL':
                     filtro_tempo = f"DATEDIFF('year', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= 1"
                     condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN CASE WHEN MONTH(F.DATA_ATENDIMENTO) <= 6 THEN 1 ELSE 2 END END) >= 2 THEN 1 ELSE 0 END"
-                
                 else: # ANUAL
                     filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= 12"
                     condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
-            
             else: # VIGENCIA
                 filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
                 condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
 
-            # Guarda as instruções geradas
             colunas_para_criar.append(f"ADD COLUMN IF NOT EXISTS {nome_col} INTEGER DEFAULT 0")
             cases_sql.append(f"{condicao_agrupada} AS {nome_col}")
             updates_sql.append(f"{nome_col} = DADOS_PROCESSADOS.{nome_col}")
 
-        # 4. Executa a criação de colunas (se houver regras novas)
+        # 4. Executa a criação de colunas
         if colunas_para_criar:
             session.sql(f"ALTER TABLE DB_GESTAO_SAUDE.GOLD.TB_DNA {', '.join(colunas_para_criar)}").collect()
 
@@ -91,7 +93,7 @@ def reprocessar_dna_lote_otimizado(session):
         zerar_colunas = ", ".join([f"{col.split('=')[0].strip()} = 0" for col in updates_sql])
         session.sql(f"UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA SET {zerar_colunas}").collect()
 
-        # 6. A QUERY MESTRA (Uma única varredura!)
+        # 6. A QUERY MESTRA
         query_mestra = f"""
             WITH DADOS_PROCESSADOS AS (
                 SELECT 
@@ -149,10 +151,8 @@ def render_aba_gestao_total(session):
         if st.button("🔄 INICIAR ATUALIZAÇÃO GLOBAL DO DNA", type="primary", use_container_width=True):
             with st.spinner("Executando motor unificado de lote... Acelerando o processamento."):
                 try:
-                    # --- A MUDANÇA ACONTECE AQUI! ---
-                    # Em vez de chamar o Snowflake para fazer o loop (antiga procedure), 
-                    # chamamos a nossa nova função Python super rápida:
-                    resultado = reprocessar_dna_lote_otimizado(session)
+                    # Chamada do Motor em Python atualizado
+                    resultado = reprocessar_dna_motor_python(session)
                     
                     # Feedback profissional: Sucesso
                     st.success(f"FINALIZADO: {resultado}")
