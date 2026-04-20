@@ -1,9 +1,125 @@
 # Nome no Repositorio: funcoes_gestao_total_dna.py
 # Objetivo: Sala de controle para reprocessamento completo da Matriz DNA.
-# Segurança: Inclui travas para evitar execucoes acidentais.
+# Segurança: Inclui travas para evitar execucoes acidentais e o novo motor otimizado em Snowpark.
 
 import streamlit as st
+import pandas as pd
 
+# ==========================================
+# 1. NOVO MOTOR DE PROCESSAMENTO (Single-Pass)
+# ==========================================
+def reprocessar_dna_lote_otimizado(session):
+    """
+    Motor Python/Snowpark otimizado. 
+    Lê o dicionário e constrói uma única query para processar TODAS as regras em uma única varredura.
+    """
+    try:
+        # 1. Pega todas as regras do Dicionário
+        df_regras = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").to_pandas()
+        
+        if df_regras.empty:
+            return "Nenhuma regra no dicionário."
+
+        # 2. Pega a Data Âncora
+        data_ancora = session.sql("SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2").collect()[0][0]
+
+        # Listas para guardar nossas construções dinâmicas
+        colunas_para_criar = []
+        cases_sql = []
+        updates_sql = []
+
+        # 3. Loop no PYTHON (Rápido) para montar as regras
+        for _, regra in df_regras.iterrows():
+            # Tratamento de variáveis
+            cat = regra['CATEGORIA'].upper().strip()
+            nome_col = cat if cat.startswith('FL_') else f"FL_{cat}"
+            
+            # Protege aspas simples no regex
+            regex = str(regra['PADRAO_REGEX']).replace("'", "''") 
+            
+            colunas_busca = str(regra['COLUNA_ALVO']).split(',')
+            tipo = str(regra['TIPO_REGRA']).upper()
+            peri = str(regra['PERIODICIDADE']).upper() if pd.notna(regra['PERIODICIDADE']) else 'NULL'
+            
+            mes_ini = int(regra['MES_INICIO']) if pd.notna(regra['MES_INICIO']) else 0
+            mes_fim = int(regra['MESES_RETROATIVOS']) if pd.notna(regra['MESES_RETROATIVOS']) else 0
+            sexo = str(regra['SEXO_ALVO'])
+            id_min = int(regra['IDADE_MIN']) if pd.notna(regra['IDADE_MIN']) else 0
+            id_max = int(regra['IDADE_MAX']) if pd.notna(regra['IDADE_MAX']) else 200
+
+            # --- MONTANDO AS CONDIÇÕES BASE ---
+            # A) Regras de Busca (Regex)
+            condicoes_regex = [f"REGEXP_LIKE(F.{col.strip()}, '{regex}', 'i')" for col in colunas_busca if col.strip()]
+            clausula_busca = "(" + " OR ".join(condicoes_regex) + ")"
+
+            # B) Regras de Perfil (Sexo e Idade)
+            filtro_perfil = f"(M.SEXO = '{sexo}' OR '{sexo}' = 'Ambos') AND (M.IDADE BETWEEN {id_min} AND {id_max} OR M.IDADE IS NULL)"
+            
+            # C) Regras de Tempo
+            if tipo == 'FREQUENCIA':
+                limite_freq = mes_fim if mes_fim > 0 else 4
+                if peri == 'MENSAL':
+                    filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= {limite_freq}"
+                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.DATA_ATENDIMENTO, 'MONTH') END) >= 3 THEN 1 ELSE 0 END"
+                
+                elif peri == 'TRIMESTRAL':
+                    filtro_tempo = f"DATEDIFF('quarter', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= {limite_freq}"
+                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.DATA_ATENDIMENTO, 'QUARTER') END) >= 3 THEN 1 ELSE 0 END"
+                
+                elif peri == 'SEMESTRAL':
+                    filtro_tempo = f"DATEDIFF('year', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= 1"
+                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN CASE WHEN MONTH(F.DATA_ATENDIMENTO) <= 6 THEN 1 ELSE 2 END END) >= 2 THEN 1 ELSE 0 END"
+                
+                else: # ANUAL
+                    filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= 12"
+                    condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
+            
+            else: # VIGENCIA
+                filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
+                condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
+
+            # Guarda as instruções geradas
+            colunas_para_criar.append(f"ADD COLUMN IF NOT EXISTS {nome_col} INTEGER DEFAULT 0")
+            cases_sql.append(f"{condicao_agrupada} AS {nome_col}")
+            updates_sql.append(f"{nome_col} = DADOS_PROCESSADOS.{nome_col}")
+
+        # 4. Executa a criação de colunas (se houver regras novas)
+        if colunas_para_criar:
+            session.sql(f"ALTER TABLE DB_GESTAO_SAUDE.GOLD.TB_DNA {', '.join(colunas_para_criar)}").collect()
+
+        # 5. Zera todas as flags na tabela DNA (preparação para o UPDATE)
+        zerar_colunas = ", ".join([f"{col.split('=')[0].strip()} = 0" for col in updates_sql])
+        session.sql(f"UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA SET {zerar_colunas}").collect()
+
+        # 6. A QUERY MESTRA (Uma única varredura!)
+        query_mestra = f"""
+            WITH DADOS_PROCESSADOS AS (
+                SELECT 
+                    M.ID_PESSOA,
+                    {', '.join(cases_sql)}
+                FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 F 
+                INNER JOIN DB_GESTAO_SAUDE.SILVER.TB_DIM_USUARIO M 
+                    ON F.ID_USUARIO = M.ID_USUARIO
+                GROUP BY M.ID_PESSOA
+            )
+            UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA DNA
+            SET {', '.join(updates_sql)}
+            FROM DADOS_PROCESSADOS
+            WHERE CAST(DNA.ID_PESSOA AS VARCHAR) = CAST(DADOS_PROCESSADOS.ID_PESSOA AS VARCHAR)
+        """
+
+        # Executa o processamento pesado no banco
+        session.sql(query_mestra).collect()
+
+        return f"Sucesso! {len(df_regras)} regras processadas em uma única varredura."
+
+    except Exception as e:
+        raise Exception(str(e)) # Repassa o erro para o Streamlit tratar
+
+
+# ==========================================
+# 2. INTERFACE (SALA DE CONTROLE)
+# ==========================================
 def render_aba_gestao_total(session):
     st.markdown("### Sala de Controle - Processamento em Lote")
     
@@ -21,9 +137,9 @@ def render_aba_gestao_total(session):
         Ao clicar no botão abaixo, o sistema irá:
         1. Percorrer TODAS as regras salvas no dicionário.
         2. Resetar os valores atuais na tabela GOLD.TB_DNA (zerar os flags).
-        3. Recalcular cada regra para toda a base de beneficiários.
+        3. Recalcular cada regra para toda a base de beneficiários utilizando o Motor Single-Pass.
         
-        Esta operação pode levar alguns minutos dependendo do volume de dados.
+        Esta operação será processada de forma simultânea e unificada.
     """)
 
     # Trava de Segurança
@@ -31,12 +147,14 @@ def render_aba_gestao_total(session):
 
     if confirmacao:
         if st.button("🔄 INICIAR ATUALIZAÇÃO GLOBAL DO DNA", type="primary", use_container_width=True):
-            with st.spinner("Executando motor de lote... Isso pode demorar."):
+            with st.spinner("Executando motor unificado de lote... Acelerando o processamento."):
                 try:
-                    # Chama a Procedure de Lote
-                    resultado = session.call("DB_GESTAO_SAUDE.SILVER.SP_REPROCESSAR_DNA_COMPLETO")
+                    # --- A MUDANÇA ACONTECE AQUI! ---
+                    # Em vez de chamar o Snowflake para fazer o loop (antiga procedure), 
+                    # chamamos a nossa nova função Python super rápida:
+                    resultado = reprocessar_dna_lote_otimizado(session)
                     
-                    # Feedback profissional: Sucesso sem balões
+                    # Feedback profissional: Sucesso
                     st.success(f"FINALIZADO: {resultado}")
                     st.toast("Base atualizada com sucesso!", icon="✅") 
                     
