@@ -9,12 +9,16 @@ def render_aba_dicionario(session):
     
     # 1. BUSCA COMPLETA: Trazendo todas as colunas físicas do banco
     try:
+        # <--- ADICIONAMOS MES_INICIO, LIMIAR_VOLUME e PERIODICIDADE AQUI
         df_dic = session.sql("""
             SELECT 
                 CATEGORIA, 
                 TIPO_REGRA,
+                PERIODICIDADE,
+                LIMIAR_VOLUME,
                 CONTEXTO_TECNICO,
                 COLUNA_ALVO, 
+                MES_INICIO,
                 MESES_RETROATIVOS, 
                 PADRAO_REGEX, 
                 NARRATIVA_CLINICA,
@@ -42,8 +46,11 @@ def render_aba_dicionario(session):
         column_config={
             "CATEGORIA": st.column_config.TextColumn("CATEGORIA", disabled=True),
             "TIPO_REGRA": st.column_config.TextColumn("TIPO REGRA", disabled=True),
+            "PERIODICIDADE": st.column_config.TextColumn("PERIODICIDADE", disabled=True),
+            "LIMIAR_VOLUME": st.column_config.NumberColumn("LIMIAR VOLUME", width="small", help="Apenas para regras de VOLUME"), # <--- NOVO
             "CONTEXTO_TECNICO": st.column_config.TextColumn("CONTEXTO TECNICO", width="medium"),
             "COLUNA_ALVO": st.column_config.TextColumn("CAMPO DE BUSCA (COLUNA_ALVO)", width="medium"),
+            "MES_INICIO": st.column_config.NumberColumn("MES INICIO", width="small", help="0 = Mês atual"), # <--- NOVO
             "MESES_RETROATIVOS": st.column_config.NumberColumn("JANELA (MESES_RETROATIVOS)", width="small", help="0 = Histórico Total"),
             "PADRAO_REGEX": st.column_config.TextColumn("PADRÃO DE BUSCA", width="medium"),
             "NARRATIVA_CLINICA": st.column_config.TextColumn("NARRATIVA CLINICA", width="large"),
@@ -55,9 +62,7 @@ def render_aba_dicionario(session):
     with col_save:
         if st.button("Salvar Alterações", type="primary"):
             try:
-                # --- A MÁGICA ESTÁ AQUI ---
                 # Comparamos o original com o editado e pegamos apenas as linhas que mudaram
-                # O .any(axis=1) verifica se houve mudança em QUALQUER coluna daquela linha
                 mudancas = df_editado[df_dic.ne(df_editado).any(axis=1)]
 
                 if mudancas.empty:
@@ -65,13 +70,16 @@ def render_aba_dicionario(session):
                 else:
                     for index, row in mudancas.iterrows():
                         # O SQL só roda para as linhas dentro de 'mudancas'
+                        # <--- ADICIONAMOS MES_INICIO e LIMIAR_VOLUME NO UPDATE
                         query_update = """
                             UPDATE DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
                             SET PADRAO_REGEX = ?,
                                 NARRATIVA_CLINICA = ?,
                                 DESCRICAO = ?,
                                 COLUNA_ALVO = ?,
+                                MES_INICIO = ?,
                                 MESES_RETROATIVOS = ?,
+                                LIMIAR_VOLUME = ?,
                                 CONTEXTO_TECNICO = ?,
                                 DT_ATUALIZACAO = CURRENT_TIMESTAMP()
                             WHERE CATEGORIA = ?
@@ -82,12 +90,13 @@ def render_aba_dicionario(session):
                             str(row['NARRATIVA_CLINICA']),
                             str(row['DESCRICAO']),
                             str(row['COLUNA_ALVO']),
+                            float(row['MES_INICIO']),          # <--- NOVO PARÂMETRO
                             int(row['MESES_RETROATIVOS']),
+                            int(row['LIMIAR_VOLUME']),         # <--- NOVO PARÂMETRO
                             str(row['CONTEXTO_TECNICO']) if pd.notna(row['CONTEXTO_TECNICO']) else "",
                             str(row['CATEGORIA'])
                         ]).collect()
                     
-                    # --- AGORA FORA DO LOOP ---
                     st.success(f"Sucesso! {len(mudancas)} regra(s) atualizada(s).")
                     st.rerun() # Recarrega para o original virar o novo 'editado'
             except Exception as e:
@@ -116,7 +125,6 @@ def render_aba_dicionario(session):
                 
                 # 2. Executamos passando a variável de forma segura na lista params
                 session.sql(query_delete, params=[regra_para_deletar]).collect()
-                # -------------------------------
                 
                 st.error(f"Regra '{regra_para_deletar}' removida com sucesso!")
                 st.rerun() # Recarrega a página para atualizar a tabela
