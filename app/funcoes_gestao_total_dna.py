@@ -5,6 +5,7 @@
 import streamlit as st
 import pandas as pd
 import re
+from config import TABELA_FATO_PRODUCAO, TABELA_DIM_USUARIO, TABELA_DICIONARIO, TABELA_DICIONARIO_COMPOSTO, TABELA_DNA # <--- NOVO
 
 # ==========================================
 # 1. MOTOR UNIVERSAL - FASE 1 (Regras Simples)
@@ -16,14 +17,14 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
     """
     try:
         if categoria_alvo:
-            df_regras = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS WHERE CATEGORIA = ?", params=[categoria_alvo]).to_pandas()
+            df_regras = session.sql(f"SELECT * FROM {TABELA_DICIONARIO} WHERE CATEGORIA = ?", params=[categoria_alvo]).to_pandas()
         else:
-            df_regras = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").to_pandas()
+            df_regras = session.sql(f"SELECT * FROM {TABELA_DICIONARIO}").to_pandas()
         
         if df_regras.empty:
             return "Nenhuma regra simples encontrada para processar."
 
-        data_ancora = session.sql("SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2").collect()[0][0]
+        data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
 
         colunas_para_criar = []
         cases_sql = []
@@ -62,8 +63,8 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
                     filtro_tempo = f"DATEDIFF('quarter', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= {limite_freq}"
                     condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.DATA_ATENDIMENTO, 'QUARTER') END) >= 3 THEN 1 ELSE 0 END"
                 elif peri == 'SEMESTRAL':
-                    filtro_tempo = f"DATEDIFF('year', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= 1"
-                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN CASE WHEN MONTH(F.DATA_ATENDIMENTO) <= 6 THEN 1 ELSE 2 END END) >= 2 THEN 1 ELSE 0 END"
+                    filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= 12"
+                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) / 6) END) >= 2 THEN 1 ELSE 0 END"
                 else: # ANUAL
                     filtro_tempo = f"DATEDIFF('month', F.DATA_ATENDIMENTO, '{data_ancora}'::DATE) <= 12"
                     condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
@@ -81,22 +82,22 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
             updates_sql.append(f"{nome_col} = DADOS_PROCESSADOS.{nome_col}")
 
         if colunas_para_criar:
-            session.sql(f"ALTER TABLE DB_GESTAO_SAUDE.GOLD.TB_DNA {', '.join(colunas_para_criar)}").collect()
+            session.sql(f"ALTER TABLE {TABELA_DNA} {', '.join(colunas_para_criar)}").collect()
 
         zerar_colunas = ", ".join([f"{col.split('=')[0].strip()} = 0" for col in updates_sql])
-        session.sql(f"UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA SET {zerar_colunas}").collect()
+        session.sql(f"UPDATE {TABELA_DNA} SET {zerar_colunas}").collect()
 
         query_mestra = f"""
             WITH DADOS_PROCESSADOS AS (
                 SELECT 
                     M.ID_PESSOA,
                     {', '.join(cases_sql)}
-                FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 F 
-                INNER JOIN DB_GESTAO_SAUDE.SILVER.TB_DIM_USUARIO M 
+                FROM {TABELA_FATO_PRODUCAO} F
+                INNER JOIN {TABELA_DIM_USUARIO} M
                     ON F.ID_USUARIO = M.ID_USUARIO
                 GROUP BY M.ID_PESSOA
             )
-            UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA DNA
+            UPDATE {TABELA_DNA} DNA
             SET {', '.join(updates_sql)}
             FROM DADOS_PROCESSADOS
             WHERE CAST(DNA.ID_PESSOA AS VARCHAR) = CAST(DADOS_PROCESSADOS.ID_PESSOA AS VARCHAR)
@@ -122,9 +123,9 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
         # Tenta buscar as regras compostas. Se a tabela não existir ou estiver vazia, ignora a Fase 2.
         try:
             if categoria_alvo:
-                df_comp = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_COMPOSTO WHERE FL_ATIVO = 1 AND CATEGORIA_COMPOSTA = ?", params=[categoria_alvo]).to_pandas()
+                df_comp = session.sql(f"SELECT * FROM {TABELA_DICIONARIO_COMPOSTO} WHERE FL_ATIVO = 1 AND CATEGORIA_COMPOSTA = ?", params=[categoria_alvo]).to_pandas()
             else:
-                df_comp = session.sql("SELECT * FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_COMPOSTO WHERE FL_ATIVO = 1").to_pandas()
+                df_comp = session.sql(f"SELECT * FROM {TABELA_DICIONARIO_COMPOSTO} WHERE FL_ATIVO = 1").to_pandas()
         except:
             return "Nenhuma regra composta configurada (Tabela vazia ou ausente)."
 
@@ -132,10 +133,10 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
             return "Nenhuma regra composta encontrada para processar."
 
         # Busca o dicionário de regras simples para "pegar emprestado" os Regex delas
-        df_simp = session.sql("SELECT CATEGORIA, PADRAO_REGEX, COLUNA_ALVO FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").to_pandas()
+        df_simp = session.sql(f"SELECT CATEGORIA, PADRAO_REGEX, COLUNA_ALVO FROM {TABELA_DICIONARIO}").to_pandas()
         dict_simples = {row['CATEGORIA']: row for _, row in df_simp.iterrows()}
 
-        data_ancora = session.sql("SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2").collect()[0][0]
+        data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
 
         # Função auxiliar para gerar o bloco de REGEX de uma lista de flags (Ex: FL_CREATININA, FL_UREIA)
         def build_regex_clause(lista_categorias_str, alias):
@@ -192,15 +193,15 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
                     join_cond = f"(B.NUMERO_GUIA = C.NUMERO_GUIA OR ABS(DATEDIFF('day', B.DATA_ATENDIMENTO, C.DATA_ATENDIMENTO)) <= {janela})"
 
             # Montagem dinâmica do JOIN apenas se houver Regras Alternativas
-            join_c = f"INNER JOIN DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 C ON B.ID_USUARIO = C.ID_USUARIO AND {join_cond} AND {alt_clause} AND {filtro_tempo_C}" if has_alt else ""
-            where_exc = f"AND NOT EXISTS (SELECT 1 FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 E WHERE E.ID_USUARIO = B.ID_USUARIO AND {exc_clause})" if has_exc else ""
+            join_c = f"INNER JOIN {TABELA_FATO_PRODUCAO} C ON B.ID_USUARIO = C.ID_USUARIO AND {join_cond} AND {alt_clause} AND {filtro_tempo_C}" if has_alt else ""
+            where_exc = f"AND NOT EXISTS (SELECT 1 FROM {TABELA_FATO_PRODUCAO} E WHERE E.ID_USUARIO = B.ID_USUARIO AND {exc_clause})" if has_exc else ""
 
             # CTE Específica da Regra
             cte_sql = f"""
             CTE_{cat_comp} AS (
                 SELECT DISTINCT B.ID_USUARIO
-                FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 B
-                INNER JOIN DB_GESTAO_SAUDE.SILVER.TB_DIM_USUARIO M ON B.ID_USUARIO = M.ID_USUARIO
+                FROM {TABELA_FATO_PRODUCAO} B
+                INNER JOIN {TABELA_DIM_USUARIO} M ON B.ID_USUARIO = M.ID_USUARIO
                 {join_c}
                 WHERE {obrig_clause} AND {filtro_tempo_B} AND {filtro_perfil}
                 {where_exc}
@@ -215,11 +216,11 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
             return "Nenhuma regra composta válida para processar."
 
         # Cria as colunas no banco se for uma regra composta nova
-        session.sql(f"ALTER TABLE DB_GESTAO_SAUDE.GOLD.TB_DNA {', '.join(colunas_para_criar)}").collect()
+        session.sql(f"ALTER TABLE {TABELA_DNA} {', '.join(colunas_para_criar)}").collect()
 
         # Zera as flags compostas atuais
         zerar_colunas = ", ".join([f"{col.split('=')[0].strip()} = 0" for col in updates_sql])
-        session.sql(f"UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA SET {zerar_colunas}").collect()
+        session.sql(f"UPDATE {TABELA_DNA} SET {zerar_colunas}").collect()
 
         # Junta todas as CTEs num mega cruzamento otimizado
         with_clause = "WITH " + ",\n".join(ctes)
@@ -231,10 +232,10 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
                 SELECT 
                     M.ID_PESSOA,
                     {', '.join(cases_sql)}
-                FROM DB_GESTAO_SAUDE.SILVER.TB_DIM_USUARIO M
+                FROM {TABELA_DIM_USUARIO} M
                 {joins_clause}
             )
-            UPDATE DB_GESTAO_SAUDE.GOLD.TB_DNA DNA
+            UPDATE {TABELA_DNA} DNA
             SET {', '.join(updates_sql)}
             FROM DADOS_PROCESSADOS
             WHERE CAST(DNA.ID_PESSOA AS VARCHAR) = CAST(DADOS_PROCESSADOS.ID_PESSOA AS VARCHAR)
@@ -255,9 +256,9 @@ def render_aba_gestao_total(session):
     st.markdown("### Sala de Controle - Processamento em Lote")
     
     try:
-        total_regras = session.sql("SELECT COUNT(*) FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS").collect()[0][0]
+        total_regras = session.sql(f"SELECT COUNT(*) FROM {TABELA_DICIONARIO}").collect()[0][0]
         try:
-            total_compostas = session.sql("SELECT COUNT(*) FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_COMPOSTO WHERE FL_ATIVO = 1").collect()[0][0]
+            total_compostas = session.sql(f"SELECT COUNT(*) FROM {TABELA_DICIONARIO_COMPOSTO} WHERE FL_ATIVO = 1").collect()[0][0]
         except:
             total_compostas = 0
             
@@ -302,7 +303,7 @@ def render_aba_gestao_total(session):
     st.write("Verifique abaixo se as colunas criadas coincidem com os seus dicionários.")
     
     try:
-        cols_dna = session.table("DB_GESTAO_SAUDE.GOLD.TB_DNA").columns
+        cols_dna = session.table(TABELA_DNA).columns
         st.write(f"Colunas ativas na Gold: {', '.join([c for c in cols_dna if c.startswith('FL_')])}")
     except Exception as e:
         st.error("Erro ao carregar colunas da tabela de auditoria.")
