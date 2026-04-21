@@ -3,6 +3,7 @@
 
 import streamlit as st
 import pandas as pd
+from config import TABELA_DICIONARIO
 
 def render_aba_dicionario(session):
     st.subheader("Gestão do Dicionário de Inteligência")
@@ -23,7 +24,7 @@ def render_aba_dicionario(session):
                 PADRAO_REGEX, 
                 NARRATIVA_CLINICA,
                 DESCRICAO
-            FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
+            FROM {TABELA_DICIONARIO}
             ORDER BY CATEGORIA
         """).to_pandas()
     except Exception as e:
@@ -72,7 +73,7 @@ def render_aba_dicionario(session):
                         # O SQL só roda para as linhas dentro de 'mudancas'
                         # <--- ADICIONAMOS MES_INICIO e LIMIAR_VOLUME NO UPDATE
                         query_update = """
-                            UPDATE DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
+                            UPDATE {TABELA_DICIONARIO} 
                             SET PADRAO_REGEX = ?,
                                 NARRATIVA_CLINICA = ?,
                                 DESCRICAO = ?,
@@ -121,7 +122,7 @@ def render_aba_dicionario(session):
         if st.button(f"Confirmar Exclusão de {regra_para_deletar}", type="secondary"):
             try:
                 # 1. Trocamos o f-string por uma query com parâmetro (?)
-                query_delete = "DELETE FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS WHERE CATEGORIA = ?"
+                query_delete = f"DELETE FROM {TABELA_DICIONARIO} WHERE CATEGORIA = ?"
                 
                 # 2. Executamos passando a variável de forma segura na lista params
                 session.sql(query_delete, params=[regra_para_deletar]).collect()
