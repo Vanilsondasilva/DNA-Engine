@@ -3,6 +3,7 @@
 
 import streamlit as st
 import re
+from config import TABELA_DICIONARIO, TABELA_DNA, TABELA_FATO_PRODUCAO, TABELA_DIM_USUARIO
 
 def render_aba_auditoria(session):
     st.markdown("### 🔎 Auditoria de Regras")
@@ -11,7 +12,7 @@ def render_aba_auditoria(session):
     try:
         df_regras = session.sql("""
             SELECT CATEGORIA, COLUNA_ALVO, PADRAO_REGEX, TIPO_REGRA, PERIODICIDADE 
-            FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
+            FROM {TABELA_DICIONARIO} 
             ORDER BY CATEGORIA
         """).to_pandas()
         
@@ -41,7 +42,7 @@ def render_aba_auditoria(session):
             # 1. Busca os pacientes que tem a flag na tabela DNA
             query_pacientes = f"""
                 SELECT ID_PESSOA 
-                FROM DB_GESTAO_SAUDE.GOLD.TB_DNA 
+                FROM {TABELA_DNA} 
                 WHERE {nome_col_dna} = 1 
                 LIMIT 10
             """
@@ -105,8 +106,8 @@ def render_aba_auditoria(session):
                     query_silver = f"""
                         SELECT 
                             {cols_select_limpa}
-                        FROM DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2 F
-                        INNER JOIN DB_GESTAO_SAUDE.SILVER.TB_DIM_USUARIO M 
+                        FROM {TABELA_FATO_PRODUCAO} F
+                        INNER JOIN {TABELA_DIM_USUARIO} M
                             ON F.ID_USUARIO = M.ID_USUARIO
                         WHERE CAST(M.ID_PESSOA AS VARCHAR) = ?
                           AND {clausula_busca}
