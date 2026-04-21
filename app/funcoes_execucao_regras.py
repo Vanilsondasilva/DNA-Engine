@@ -4,6 +4,7 @@
 import streamlit as st
 import pandas as pd
 from funcoes_gestao_total_dna import reprocessar_dna_motor_python
+from config import TABELA_FATO_PRODUCAO, TABELA_DICIONARIO, TABELA_DICIONARIO_COMPOSTO
 
 def render_aba_execucao(session):
     st.subheader("Configuracao de Regra de Inteligencia")
@@ -22,7 +23,7 @@ def render_aba_execucao(session):
     if modo_criacao == "Regra Simples (Evento Único/Volume)":
         # --- 1. CARGA DE COLUNAS (Apontando para a tabela otimizada YEAR2) ---
         try:
-            colunas_base = session.table("DB_GESTAO_SAUDE.SILVER.TB_FATO_PRODUCAO_YEAR2").columns
+            colunas_base = session.table(TABELA_FATO_PRODUCAO).columns
         except:
             colunas_base = ["SERVICO", "GRUPO_ASSISTENCIAL", "SUBGR_SERVICO", "CODIGO_SERVICO", "CODIGO_CID"]
 
@@ -111,8 +112,8 @@ def render_aba_execucao(session):
             else:
                 try:
                     # 1. Insercao Segura no Dicionario usando Bind Variables (?)
-                    query_insert = """
-                        INSERT INTO DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS 
+                    query_insert = f"""
+                        INSERT INTO {TABELA_DICIONARIO}
                         (CATEGORIA, PADRAO_REGEX, TIPO_REGRA, PERIODICIDADE, LIMIAR_VOLUME, COLUNA_ALVO, 
                          MES_INICIO, MESES_RETROATIVOS, SEXO_ALVO, IDADE_MIN, IDADE_MAX, 
                          DESCRICAO, NARRATIVA_CLINICA, CONTEXTO_TECNICO, DT_CRIACAO, 
@@ -165,7 +166,7 @@ def render_aba_execucao(session):
         
         # 1. Pega as categorias existentes no banco para preencher as opções
         try:
-            df_flags = session.sql("SELECT CATEGORIA FROM DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_REGRAS ORDER BY CATEGORIA").to_pandas()
+            df_flags = session.sql(f"SELECT CATEGORIA FROM {TABELA_DICIONARIO} ORDER BY CATEGORIA").to_pandas()
             lista_flags = df_flags['CATEGORIA'].tolist() if not df_flags.empty else []
         except:
             lista_flags = []
@@ -230,8 +231,8 @@ def render_aba_execucao(session):
                     str_exc = ",".join(req_exc)
                     int_ordem = 1 if exige_ordem else 0
 
-                    query_insert_comp = """
-                        INSERT INTO DB_GESTAO_SAUDE.SILVER.TB_DICIONARIO_COMPOSTO 
+                    query_insert_comp = f"""
+                        INSERT INTO {TABELA_DICIONARIO_COMPOSTO} 
                         (CATEGORIA_COMPOSTA, REGRAS_OBRIGATORIAS, REGRAS_ALTERNATIVAS, REGRAS_EXCLUSAO, 
                          JANELA_COOCORRENCIA_DIAS, EXIGE_ORDEM_CRONOLOGICA, MES_INICIO, MESES_RETROATIVOS, 
                          SEXO_ALVO, IDADE_MIN, IDADE_MAX, CONTEXTO_TECNICO, NARRATIVA_CLINICA, FL_ATIVO,
