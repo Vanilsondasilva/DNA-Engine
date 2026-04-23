@@ -32,3 +32,8 @@ TABELA_DIM_USUARIO   = f"{SCHEMA_BRONZE_FEDERACAO}.USUARIOS"
 TABELA_DICIONARIO          = f"{SCHEMA_SILVER}.TB_DICIONARIO_REGRAS"
 TABELA_DICIONARIO_COMPOSTO = f"{SCHEMA_SILVER}.TB_DICIONARIO_COMPOSTO"
 TABELA_DNA                 = f"{SCHEMA_GOLD}.TB_DNA"
+
+# ==========================================
+# Colunas Dinâmicas da Tabela Fato
+# ==========================================
+DATA_ATENDIMENTO = "DATA_ATENDIMENTO_FATO_PRO"
