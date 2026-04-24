@@ -25,6 +25,8 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
             return "Nenhuma regra simples encontrada para processar."
 
         data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
+        if not data_ancora:
+            raise Exception("A tabela de produção está vazia. Nenhuma data âncora encontrada para processar as regras.")
 
         colunas_para_criar = []
         cases_sql = []
@@ -50,7 +52,7 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
             id_max = int(regra['IDADE_MAX']) if pd.notna(regra['IDADE_MAX']) else 200
 
             # --- MONTANDO AS CONDIÇÕES BASE ---
-            condicoes_regex = [f"REGEXP_LIKE(F.{col}, '{regex}', 'i')" for col in colunas_busca]
+            condicoes_regex = [f"REGEXP_LIKE(TO_VARCHAR(F.{col}), '{regex}', 'i')" for col in colunas_busca]
             clausula_busca = "(" + " OR ".join(condicoes_regex) + ")"
             filtro_perfil = f"(M.SEXO = '{sexo}' OR '{sexo}' = 'Ambos') AND (M.IDADE BETWEEN {id_min} AND {id_max} OR M.IDADE IS NULL)"
             
@@ -137,6 +139,8 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
         dict_simples = {row['CATEGORIA']: row for _, row in df_simp.iterrows()}
 
         data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX(DATA_ATENDIMENTO), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
+        if not data_ancora:
+            raise Exception("A tabela de produção está vazia. Nenhuma data âncora encontrada para processar as regras compostas.")
 
         # Função auxiliar para gerar o bloco de REGEX de uma lista de flags (Ex: FL_CREATININA, FL_UREIA)
         def build_regex_clause(lista_categorias_str, alias):
@@ -149,7 +153,7 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
                     cols = str(dict_simples[cat]['COLUNA_ALVO']).split(',')
                     for c in cols:
                         c = re.sub(r'[^A-Z0-9_]', '', c.strip().upper())
-                        conds.append(f"REGEXP_LIKE({alias}.{c}, '{regex}', 'i')")
+                        conds.append(f"REGEXP_LIKE(TO_VARCHAR({alias}.{c}), '{regex}', 'i')")
             return "(" + " OR ".join(conds) + ")" if conds else "1=0"
 
         ctes = []

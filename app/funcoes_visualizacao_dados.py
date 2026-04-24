@@ -3,6 +3,7 @@
 
 import streamlit as st
 import pandas as pd
+from config import TABELA_DNA
 
 def render_aba_visualizacao(session):
     st.subheader("Prévia da Tabela GOLD.TB_DNA")
@@ -13,7 +14,7 @@ def render_aba_visualizacao(session):
     try:
         # Modo elegante e seguro do Snowpark (sem escrever texto SQL manual)
         # O .to_pandas() garante que a tabela terá recursos interativos (busca, ordenação, download)
-        df_preview = session.table("DB_GESTAO_SAUDE.GOLD.TB_DNA").limit(limite).to_pandas()
+        df_preview = session.table(TABELA_DNA).limit(limite).to_pandas()
         
         if df_preview.empty:
             st.info("A tabela DNA está vazia. Rode o processamento na Sala de Controle para gerar os dados.")

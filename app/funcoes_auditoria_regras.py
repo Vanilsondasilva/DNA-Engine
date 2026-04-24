@@ -10,7 +10,7 @@ def render_aba_auditoria(session):
     st.write("Selecione uma regra e um paciente para visualizar os eventos que ativaram a flag.")
     
     try:
-        df_regras = session.sql("""
+        df_regras = session.sql(f"""
             SELECT CATEGORIA, COLUNA_ALVO, PADRAO_REGEX, TIPO_REGRA, PERIODICIDADE 
             FROM {TABELA_DICIONARIO} 
             ORDER BY CATEGORIA
@@ -71,7 +71,7 @@ def render_aba_auditoria(session):
                     binds_regex = []
                     
                     for col in colunas_array:
-                        condicoes_regex.append(f"REGEXP_LIKE(F.{col}, ?, 'i')")
+                        condicoes_regex.append(f"REGEXP_LIKE(TO_VARCHAR(F.{col}), ?, 'i')")
                         binds_regex.append(regex)
                         
                     clausula_busca = "(" + " OR ".join(condicoes_regex) + ")"

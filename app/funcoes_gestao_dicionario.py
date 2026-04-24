@@ -11,7 +11,7 @@ def render_aba_dicionario(session):
     # 1. BUSCA COMPLETA: Trazendo todas as colunas físicas do banco
     try:
         # <--- ADICIONAMOS MES_INICIO, LIMIAR_VOLUME e PERIODICIDADE AQUI
-        df_dic = session.sql("""
+        df_dic = session.sql(f"""
             SELECT 
                 CATEGORIA, 
                 TIPO_REGRA,
@@ -72,7 +72,7 @@ def render_aba_dicionario(session):
                     for index, row in mudancas.iterrows():
                         # O SQL só roda para as linhas dentro de 'mudancas'
                         # <--- ADICIONAMOS MES_INICIO e LIMIAR_VOLUME NO UPDATE
-                        query_update = """
+                        query_update = f"""
                             UPDATE {TABELA_DICIONARIO} 
                             SET PADRAO_REGEX = ?,
                                 NARRATIVA_CLINICA = ?,
