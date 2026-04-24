@@ -36,4 +36,4 @@ TABELA_DNA                 = f"{SCHEMA_GOLD}.TB_DNA"
 # ==========================================
 # Colunas Dinâmicas da Tabela Fato
 # ==========================================
-DATA_ATENDIMENTO = "DATA_ATENDIMENTO_FATO_PRO"
+DATA_ATENDIMENTO = "TRY_TO_DATE(DATA_ATENDIMENTO_FATO_PRO, 'DD/MM/YYYY')"
