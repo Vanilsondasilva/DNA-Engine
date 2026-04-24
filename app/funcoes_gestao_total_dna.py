@@ -24,7 +24,7 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
         if df_regras.empty:
             return "Nenhuma regra simples encontrada para processar."
 
-        data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX({DATA_ATENDIMENTO}), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
+        data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX({DATA_ATENDIMENTO}), 'DD/MM/YYYY') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
 
         colunas_para_criar = []
         cases_sql = []
@@ -88,18 +88,20 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
         session.sql(f"UPDATE {TABELA_DNA} SET {zerar_colunas}").collect()
 
         query_mestra = f"""
-            WITH DADOS_PROCESSADOS AS (
-                SELECT 
-                    M.ID_PESSOA,
-                    {', '.join(cases_sql)}
-                FROM {TABELA_FATO_PRODUCAO} F
-                INNER JOIN {TABELA_DIM_USUARIO} M
-                    ON F.ID_USUARIO = M.ID_USUARIO
-                GROUP BY M.ID_PESSOA
-            )
             UPDATE {TABELA_DNA} DNA
             SET {', '.join(updates_sql)}
-            FROM DADOS_PROCESSADOS
+            FROM (
+                WITH DADOS_PROCESSADOS AS (
+                    SELECT 
+                        M.ID_PESSOA,
+                        {', '.join(cases_sql)}
+                    FROM {TABELA_FATO_PRODUCAO} F
+                    INNER JOIN {TABELA_DIM_USUARIO} M
+                        ON F.ID_USUARIO = M.ID_USUARIO
+                    GROUP BY M.ID_PESSOA
+                )
+                SELECT * FROM DADOS_PROCESSADOS
+            ) DADOS_PROCESSADOS
             WHERE CAST(DNA.ID_PESSOA AS VARCHAR) = CAST(DADOS_PROCESSADOS.ID_PESSOA AS VARCHAR)
         """
 
