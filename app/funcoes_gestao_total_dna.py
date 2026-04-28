@@ -10,6 +10,63 @@ from config import (TABELA_FATO_PRODUCAO, TABELA_DIM_USUARIO, TABELA_DICIONARIO,
                     COLUNA_DATA_ATENDIMENTO, COLUNA_ID_USUARIO,
                     COLUNA_ID_PESSOA, COLUNA_NUMERO_GUIA)
 
+# Cache para o nome resolvido da coluna de data (evita consultar INFORMATION_SCHEMA a cada chamada)
+_coluna_data_resolvida = None
+
+def _resolver_coluna_data(session):
+    """
+    Retorna o nome real da coluna de data na tabela fato.
+    Primeiro tenta o valor configurado em config.py (COLUNA_DATA_ATENDIMENTO).
+    Se falhar, busca automaticamente uma coluna DATE/TIMESTAMP no INFORMATION_SCHEMA.
+    Lança Exception descritiva com a lista de colunas disponíveis se nenhuma for encontrada.
+    """
+    global _coluna_data_resolvida
+    if _coluna_data_resolvida:
+        return _coluna_data_resolvida
+
+    # 1. Tenta o nome configurado
+    try:
+        session.sql(f"SELECT {COLUNA_DATA_ATENDIMENTO} FROM {TABELA_FATO_PRODUCAO} LIMIT 1").collect()
+        _coluna_data_resolvida = COLUNA_DATA_ATENDIMENTO
+        return _coluna_data_resolvida
+    except Exception:
+        pass
+
+    # 2. Auto-detecção via INFORMATION_SCHEMA
+    partes = TABELA_FATO_PRODUCAO.split('.')
+    db, schema, tabela = partes[0], partes[1], partes[2]
+
+    try:
+        candidatas = session.sql(f"""
+            SELECT COLUMN_NAME
+            FROM {db}.INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = '{schema}'
+              AND TABLE_NAME   = '{tabela}'
+              AND DATA_TYPE IN ('DATE','TIMESTAMP','TIMESTAMP_NTZ','TIMESTAMP_LTZ','TIMESTAMP_TZ')
+            ORDER BY ORDINAL_POSITION
+        """).collect()
+
+        if candidatas:
+            _coluna_data_resolvida = candidatas[0][0]
+            return _coluna_data_resolvida
+
+        # 3. Sem candidatas — lista todas as colunas para ajudar no diagnóstico
+        todas = session.sql(f"""
+            SELECT COLUMN_NAME || ' (' || DATA_TYPE || ')' AS INFO
+            FROM {db}.INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{tabela}'
+            ORDER BY ORDINAL_POSITION
+        """).collect()
+        lista = ', '.join([r[0] for r in todas]) if todas else 'tabela não encontrada'
+        raise Exception(
+            f"Nenhuma coluna de data encontrada em {TABELA_FATO_PRODUCAO}. "
+            f"Coluna configurada: '{COLUNA_DATA_ATENDIMENTO}'. "
+            f"Colunas disponíveis: {lista}"
+        )
+    except Exception as e:
+        raise Exception(str(e))
+
+
 # ==========================================
 # 1. MOTOR UNIVERSAL - FASE 1 (Regras Simples)
 # ==========================================
@@ -27,7 +84,8 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
         if df_regras.empty:
             return "Nenhuma regra simples encontrada para processar."
 
-        data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX({COLUNA_DATA_ATENDIMENTO}), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
+        col_data = _resolver_coluna_data(session)
+        data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX({col_data}), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
         if not data_ancora:
             raise Exception("A tabela de produção está vazia. Nenhuma data âncora encontrada para processar as regras.")
 
@@ -62,24 +120,24 @@ def reprocessar_dna_motor_python(session, categoria_alvo=None):
             if tipo == 'FREQUENCIA':
                 limite_freq = mes_fim if mes_fim > 0 else 4
                 if peri == 'MENSAL':
-                    filtro_tempo = f"DATEDIFF('month', F.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) <= {limite_freq}"
-                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.{COLUNA_DATA_ATENDIMENTO}, 'MONTH') END) >= 3 THEN 1 ELSE 0 END"
+                    filtro_tempo = f"DATEDIFF('month', F.{col_data}, '{data_ancora}'::DATE) <= {limite_freq}"
+                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.{col_data}, 'MONTH') END) >= 3 THEN 1 ELSE 0 END"
                 elif peri == 'TRIMESTRAL':
-                    filtro_tempo = f"DATEDIFF('quarter', F.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) <= {limite_freq}"
-                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.{COLUNA_DATA_ATENDIMENTO}, 'QUARTER') END) >= 3 THEN 1 ELSE 0 END"
+                    filtro_tempo = f"DATEDIFF('quarter', F.{col_data}, '{data_ancora}'::DATE) <= {limite_freq}"
+                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(F.{col_data}, 'QUARTER') END) >= 3 THEN 1 ELSE 0 END"
                 elif peri == 'SEMESTRAL':
-                    filtro_tempo = f"DATEDIFF('month', F.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) <= 12"
-                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(DATEDIFF('month', F.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) / 6) END) >= 2 THEN 1 ELSE 0 END"
+                    filtro_tempo = f"DATEDIFF('month', F.{col_data}, '{data_ancora}'::DATE) <= 12"
+                    condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN TRUNC(DATEDIFF('month', F.{col_data}, '{data_ancora}'::DATE) / 6) END) >= 2 THEN 1 ELSE 0 END"
                 else: # ANUAL
-                    filtro_tempo = f"DATEDIFF('month', F.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) <= 12"
+                    filtro_tempo = f"DATEDIFF('month', F.{col_data}, '{data_ancora}'::DATE) <= 12"
                     condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
             
             elif tipo == 'VOLUME': 
-                filtro_tempo = f"DATEDIFF('month', F.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
+                filtro_tempo = f"DATEDIFF('month', F.{col_data}, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
                 condicao_agrupada = f"CASE WHEN COUNT(DISTINCT CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN F.{COLUNA_NUMERO_GUIA} END) >= {limiar_volume} THEN 1 ELSE 0 END"
             
             else: # VIGENCIA
-                filtro_tempo = f"DATEDIFF('month', F.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
+                filtro_tempo = f"DATEDIFF('month', F.{col_data}, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
                 condicao_agrupada = f"MAX(CASE WHEN {clausula_busca} AND {filtro_tempo} AND {filtro_perfil} THEN 1 ELSE 0 END)"
 
             colunas_para_criar.append(f"ADD COLUMN IF NOT EXISTS {nome_col} INTEGER DEFAULT 0")
@@ -141,11 +199,11 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
         df_simp = session.sql(f"SELECT CATEGORIA, PADRAO_REGEX, COLUNA_ALVO FROM {TABELA_DICIONARIO}").to_pandas()
         dict_simples = {row['CATEGORIA']: row for _, row in df_simp.iterrows()}
 
-        data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX({COLUNA_DATA_ATENDIMENTO}), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
+        col_data = _resolver_coluna_data(session)
+        data_ancora = session.sql(f"SELECT TO_VARCHAR(MAX({col_data}), 'YYYY-MM-DD') FROM {TABELA_FATO_PRODUCAO}").collect()[0][0]
         if not data_ancora:
             raise Exception("A tabela de produção está vazia. Nenhuma data âncora encontrada para processar as regras compostas.")
 
-        # Função auxiliar para gerar o bloco de REGEX de uma lista de flags (Ex: FL_CREATININA, FL_UREIA)
         def build_regex_clause(lista_categorias_str, alias):
             if not lista_categorias_str or pd.isna(lista_categorias_str): return "1=0"
             cats = [c.strip() for c in str(lista_categorias_str).split(',') if c.strip()]
@@ -187,17 +245,17 @@ def reprocessar_dna_motor_composto(session, categoria_alvo=None):
             sexo, id_min, id_max = str(regra['SEXO_ALVO']), float(regra['IDADE_MIN']), float(regra['IDADE_MAX'])
 
             filtro_perfil = f"(M.SEXO = '{sexo}' OR '{sexo}' = 'Ambos') AND (M.IDADE BETWEEN {id_min} AND {id_max} OR M.IDADE IS NULL)"
-            filtro_tempo_B = f"DATEDIFF('month', B.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
-            filtro_tempo_C = f"DATEDIFF('month', C.{COLUNA_DATA_ATENDIMENTO}, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
+            filtro_tempo_B = f"DATEDIFF('month', B.{col_data}, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
+            filtro_tempo_C = f"DATEDIFF('month', C.{col_data}, '{data_ancora}'::DATE) BETWEEN {mes_ini} AND {mes_fim}"
 
             # Regra de Co-ocorrência (Mesma Guia OU Janela de Dias)
             if janela == 0:
                 join_cond = f"B.{COLUNA_NUMERO_GUIA} = C.{COLUNA_NUMERO_GUIA}"
             else:
                 if ordem == 1: # Obrigatório tem que ocorrer ANTES ou no mesmo dia do Alternativo
-                    join_cond = f"(B.{COLUNA_NUMERO_GUIA} = C.{COLUNA_NUMERO_GUIA} OR (DATEDIFF('day', B.{COLUNA_DATA_ATENDIMENTO}, C.{COLUNA_DATA_ATENDIMENTO}) BETWEEN 0 AND {janela}))"
+                    join_cond = f"(B.{COLUNA_NUMERO_GUIA} = C.{COLUNA_NUMERO_GUIA} OR (DATEDIFF('day', B.{col_data}, C.{col_data}) BETWEEN 0 AND {janela}))"
                 else: # Podem ocorrer em qualquer ordem dentro da janela
-                    join_cond = f"(B.{COLUNA_NUMERO_GUIA} = C.{COLUNA_NUMERO_GUIA} OR ABS(DATEDIFF('day', B.{COLUNA_DATA_ATENDIMENTO}, C.{COLUNA_DATA_ATENDIMENTO})) <= {janela})"
+                    join_cond = f"(B.{COLUNA_NUMERO_GUIA} = C.{COLUNA_NUMERO_GUIA} OR ABS(DATEDIFF('day', B.{col_data}, C.{col_data})) <= {janela})"
 
             # Montagem dinâmica do JOIN apenas se houver Regras Alternativas
             join_c = f"INNER JOIN {TABELA_FATO_PRODUCAO} C ON B.{COLUNA_ID_USUARIO} = C.{COLUNA_ID_USUARIO} AND {join_cond} AND {alt_clause} AND {filtro_tempo_C}" if has_alt else ""
