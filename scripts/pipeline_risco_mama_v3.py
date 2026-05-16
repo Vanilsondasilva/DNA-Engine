@@ -1,4 +1,4 @@
-# Nome no Repositorio: pipeline_risco_mama_v3.py
+# Nome no Repositório: pipeline_risco_mama_v3.py
 # Objetivo: Pipeline de risco mama com engenharia base e inferência por cadeias clínicas.
 
 from __future__ import annotations
@@ -123,9 +123,10 @@ class FeatureEngineer:
         self,
         df_producao: pd.DataFrame,
         df_usuarios: pd.DataFrame,
+        timeline: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         usuarios = self._normalizar_usuarios(df_usuarios)
-        timeline = TimelineBuilder(df_producao).build()
+        timeline = timeline if timeline is not None else TimelineBuilder(df_producao).build()
 
         base = usuarios[
             [col for col in ["ID_USUARIO", "IDADE_USU", "SEXO", "IDADE_MAIOR_50"] if col in usuarios.columns]
@@ -225,14 +226,17 @@ class RiscoMamaPipeline:
         df_producao: pd.DataFrame,
         df_usuarios: pd.DataFrame,
     ) -> pd.DataFrame:
+        timeline = TimelineBuilder(df_producao).build()
         df = self.feature_engineer.build(
             df_producao=df_producao,
             df_usuarios=df_usuarios,
+            timeline=timeline,
         )
 
         df_chains = self.detector.detectar(
             df_producao=df_producao,
             df_usuarios=df_usuarios,
+            timeline=timeline,
         )
         df = df.merge(df_chains, on="ID_USUARIO", how="left")
         df[self.detector.FLAGS] = df[self.detector.FLAGS].fillna(0).astype(int)

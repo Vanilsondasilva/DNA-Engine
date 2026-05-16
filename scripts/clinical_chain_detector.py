@@ -1,4 +1,4 @@
-# Nome no Repositorio: clinical_chain_detector.py
+# Nome no Repositório: clinical_chain_detector.py
 # Objetivo: Inferir sinais clínicos de risco mama por cadeia temporal de eventos.
 
 from __future__ import annotations
@@ -118,7 +118,7 @@ CADEIAS_PADRAO: List[CadeiaConfig] = [
 ]
 
 PARTO_TARDIO_CONFIG = CadeiaConfig(
-    nome="Parto Primípara Após os 30 Anos",
+    nome="Parto Primíparo Após os 30 Anos",
     flag_saida="PARTO_PRIMIPARO_APOS_30",
     descricao=(
         "Primeiro parto registrado quando a beneficiária tinha mais de 30 anos."
@@ -374,9 +374,10 @@ class ClinicalChainDetector:
         self,
         df_producao: pd.DataFrame,
         df_usuarios: pd.DataFrame,
+        timeline: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         logger.info("ClinicalChainDetector: construindo timeline...")
-        timeline = TimelineBuilder(df_producao).build()
+        timeline = timeline if timeline is not None else TimelineBuilder(df_producao).build()
         resultado = self._todos_usuarios(timeline, df_usuarios)
 
         for cadeia in self.cadeias:
@@ -406,7 +407,11 @@ class ClinicalChainDetector:
 
     def resumo(self, df_chains: pd.DataFrame) -> pd.DataFrame:
         rows = []
-        total = len(df_chains) if len(df_chains) > 0 else 1
+        if len(df_chains) == 0:
+            return pd.DataFrame(
+                columns=["FLAG_INFERIDA", "PESO_ESTIMADO", "TOTAL_ATIVO", "PCT_ATIVO"]
+            )
+        total = len(df_chains)
         for flag in self.FLAGS:
             if flag in df_chains.columns:
                 ativos = int(pd.to_numeric(df_chains[flag], errors="coerce").fillna(0).sum())
