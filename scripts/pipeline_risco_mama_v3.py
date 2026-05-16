@@ -1,4 +1,4 @@
-# Nome no Repositorio: pipeline_risco_mama.py
+# Nome no Repositorio: pipeline_risco_mama_v3.py
 # Objetivo: Pipeline de risco mama com engenharia base e inferência por cadeias clínicas.
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ try:
         TimelineBuilder,
     )
 except ImportError:  # pragma: no cover
-    from app.clinical_chain_detector import (
+    from scripts.clinical_chain_detector import (
         ClinicalChainDetector,
         FLAGS_NOVAS_PARA_SCORE,
         TUSS_BRCA,

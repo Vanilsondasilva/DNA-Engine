@@ -103,8 +103,6 @@ graph TB
 ```
 app/
 ├── streamlit_app.py            # Orquestrador principal — monta as 5 abas
-├── pipeline_risco_mama.py      # Pipeline de risco mama com score e flags inferidas
-├── clinical_chain_detector.py  # Inferência de cadeias clínicas temporais
 ├── config.py                   # Centralização de nomes de banco/schema/tabela
 ├── funcoes_execucao_regras.py  # Aba 1: Formulário de criação de regras
 ├── funcoes_gestao_dicionario.py# Aba 2: Editor e exclusão de regras
@@ -114,13 +112,18 @@ app/
 ├── setup_banco_dna.sql         # Script DDL para criação das tabelas
 ├── setup_infraestrutura_dna.sql# Stored Procedures legadas (referência histórica)
 └── environment.yml             # Dependências Python do ambiente Snowflake
+
+scripts/
+├── pipeline_risco_mama_v3.py   # Pipeline de risco mama v3 com score e flags inferidas
+├── clinical_chain_detector.py  # Inferência de cadeias clínicas temporais
+└── __init__.py                 # Permite importação do diretório como pacote
 ```
 
 ---
 
 ## Pipeline adicional — Risco Mama
 
-O repositório também inclui `app/pipeline_risco_mama.py`, um pipeline específico para risco mama, apoiado pelo módulo `app/clinical_chain_detector.py`.
+O repositório também inclui `scripts/pipeline_risco_mama_v3.py`, um pipeline específico para risco mama, apoiado pelo módulo `scripts/clinical_chain_detector.py`.
 
 As novas flags inferidas por cadeia temporal são:
 
