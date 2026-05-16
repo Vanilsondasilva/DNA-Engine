@@ -118,7 +118,7 @@ CADEIAS_PADRAO: List[CadeiaConfig] = [
 ]
 
 PARTO_TARDIO_CONFIG = CadeiaConfig(
-    nome="Parto Primíparo Após os 30 Anos",
+    nome="Parto Primípara Após os 30 Anos",
     flag_saida="PARTO_PRIMIPARO_APOS_30",
     descricao=(
         "Primeiro parto registrado quando a beneficiária tinha mais de 30 anos."
@@ -288,7 +288,12 @@ class PartoTardioDetector:
         usuarios = df_usuarios.copy()
 
         id_col = "ID_USUARIO" if "ID_USUARIO" in usuarios.columns else None
-        idade_col = "IDADE_USU" if "IDADE_USU" in usuarios.columns else "IDADE" if "IDADE" in usuarios.columns else None
+        if "IDADE_USU" in usuarios.columns:
+            idade_col = "IDADE_USU"
+        elif "IDADE" in usuarios.columns:
+            idade_col = "IDADE"
+        else:
+            idade_col = None
 
         if not id_col or not idade_col:
             self._ano_nascimento: Dict[str, int] = {}
