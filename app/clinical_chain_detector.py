@@ -355,7 +355,7 @@ class ClinicalChainDetector:
     def __init__(
         self,
         cadeias: Optional[List[CadeiaConfig]] = None,
-        config=None,
+        config: Optional[object] = None,
     ) -> None:
         self.cadeias = cadeias or CADEIAS_PADRAO
         self._config = config

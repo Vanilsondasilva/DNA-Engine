@@ -232,10 +232,14 @@ class RiscoMamaPipeline:
         df[self.detector.FLAGS] = df[self.detector.FLAGS].fillna(0).astype(int)
         df = self._calcular_score(df)
         df["FAIXA_RISCO_MAMA"] = df["SCORE_RISCO_MAMA"].apply(self._classificar_risco)
-        return df.sort_values(
-            by=["SCORE_RISCO_MAMA", "QTD_EVENTOS_MAMA"],
-            ascending=[False, False],
-        ).reset_index(drop=True)
+        colunas_ordem = ["SCORE_RISCO_MAMA"]
+        ascendente = [False]
+        if "QTD_EVENTOS_MAMA" in df.columns:
+            colunas_ordem.append("QTD_EVENTOS_MAMA")
+            ascendente.append(False)
+        return df.sort_values(by=colunas_ordem, ascending=ascendente).reset_index(
+            drop=True
+        )
 
     def resumo_flags(self, df_resultado: pd.DataFrame) -> pd.DataFrame:
         return self.detector.resumo(df_resultado)
