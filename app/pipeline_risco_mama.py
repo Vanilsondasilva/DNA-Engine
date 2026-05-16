@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
@@ -22,6 +23,8 @@ except ImportError:  # pragma: no cover
         TUSS_BRCA,
         TimelineBuilder,
     )
+
+logger = logging.getLogger(__name__)
 
 
 PADROES_FEATURES_BASE: Dict[str, List[str]] = {
@@ -184,6 +187,7 @@ class RiscoMamaPipeline:
 
         for flag in self._flags_score:
             if flag not in df.columns:
+                logger.warning("Flag configurada para score não encontrada no DataFrame: %s", flag)
                 continue
             valor = pd.to_numeric(df[flag], errors="coerce").fillna(0).astype(int)
             peso = self.cfg.peso(flag)
@@ -244,31 +248,31 @@ if __name__ == "__main__":
     df_prod_mock = pd.DataFrame(
         [
             {
-                "ID_USUARIO_LIMPO": "U001",
+                "ID_USUARIO": "U001",
                 "DATA_ATENDIMENTO": "2024-01-10",
                 "SERVICO": "MAMOGRAFIA BILATERAL",
                 "CODIGO_SERVICO": "40301366",
             },
             {
-                "ID_USUARIO_LIMPO": "U001",
+                "ID_USUARIO": "U001",
                 "DATA_ATENDIMENTO": "2024-02-20",
                 "SERVICO": "BIOPSIA CORE BIOPSY MAMA",
                 "CODIGO_SERVICO": "40307360",
             },
             {
-                "ID_USUARIO_LIMPO": "U003",
+                "ID_USUARIO": "U003",
                 "DATA_ATENDIMENTO": "2024-03-01",
                 "SERVICO": "SEQUENCIAMENTO GENETICO BRCA1 BRCA2",
                 "CODIGO_SERVICO": "40313171",
             },
             {
-                "ID_USUARIO_LIMPO": "U003",
+                "ID_USUARIO": "U003",
                 "DATA_ATENDIMENTO": "2024-05-15",
                 "SERVICO": "MASTECTOMIA PROFILATICA BILATERAL",
                 "CODIGO_SERVICO": "30903027",
             },
             {
-                "ID_USUARIO_LIMPO": "U004",
+                "ID_USUARIO": "U004",
                 "DATA_ATENDIMENTO": "2020-07-12",
                 "SERVICO": "PARTO CESARIA",
                 "CODIGO_SERVICO": "31309135",

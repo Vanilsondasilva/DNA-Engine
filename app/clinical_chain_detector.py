@@ -281,10 +281,15 @@ class ChainMatcher:
 
 
 class PartoTardioDetector:
+    IDADE_LIMITE_PRIMEIRO_PARTO = 30
     TERMOS = TERMOS_PARTO
 
-    def __init__(self, df_usuarios: pd.DataFrame) -> None:
-        today = date.today()
+    def __init__(
+        self,
+        df_usuarios: pd.DataFrame,
+        reference_date: Optional[date] = None,
+    ) -> None:
+        today = reference_date or date.today()
         usuarios = df_usuarios.copy()
 
         id_col = "ID_USUARIO" if "ID_USUARIO" in usuarios.columns else None
@@ -331,7 +336,10 @@ class PartoTardioDetector:
         resultados = {}
         for uid, data_parto in primeiro_parto.items():
             ano_nasc = self._ano_nascimento.get(uid)
-            resultados[uid] = int(ano_nasc is not None and (data_parto.year - ano_nasc) > 30)
+            resultados[uid] = int(
+                ano_nasc is not None
+                and (data_parto.year - ano_nasc) > self.IDADE_LIMITE_PRIMEIRO_PARTO
+            )
         return pd.Series(resultados, name=PARTO_TARDIO_CONFIG.flag_saida, dtype=int)
 
 
