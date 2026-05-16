@@ -289,7 +289,7 @@ class PartoTardioDetector:
         df_usuarios: pd.DataFrame,
         reference_date: Optional[date] = None,
     ) -> None:
-        today = reference_date or date.today()
+        base_date = reference_date or date.today()
         usuarios = df_usuarios.copy()
 
         id_col = "ID_USUARIO" if "ID_USUARIO" in usuarios.columns else None
@@ -308,7 +308,7 @@ class PartoTardioDetector:
         usuarios = usuarios.rename(columns={id_col: "ID_USUARIO", idade_col: "IDADE_USU"})
         usuarios["ID_USUARIO"] = usuarios["ID_USUARIO"].astype(str).str.strip()
         usuarios["IDADE_USU"] = pd.to_numeric(usuarios["IDADE_USU"], errors="coerce")
-        usuarios["ANO_NASC_APROX"] = today.year - usuarios["IDADE_USU"]
+        usuarios["ANO_NASC_APROX"] = base_date.year - usuarios["IDADE_USU"]
         self._ano_nascimento = (
             usuarios.dropna(subset=["ANO_NASC_APROX"])
             .set_index("ID_USUARIO")["ANO_NASC_APROX"]
@@ -406,7 +406,7 @@ class ClinicalChainDetector:
 
     def resumo(self, df_chains: pd.DataFrame) -> pd.DataFrame:
         rows = []
-        total = max(len(df_chains), 1)
+        total = len(df_chains) if len(df_chains) > 0 else 1
         for flag in self.FLAGS:
             if flag in df_chains.columns:
                 ativos = int(pd.to_numeric(df_chains[flag], errors="coerce").fillna(0).sum())

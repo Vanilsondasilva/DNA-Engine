@@ -42,6 +42,9 @@ PADROES_FEATURES_BASE: Dict[str, List[str]] = {
     "MASTECTOMIA_PROFILATICA_REALIZADA": ["MASTECTOMIA PROFILAT"],
 }
 FLAGS_BASE_PARA_SCORE = list(PADROES_FEATURES_BASE) + ["IDADE_MAIOR_50"]
+TERMOS_RELEVANTES_BASE = sorted(
+    {termo for termos in PADROES_FEATURES_BASE.values() for termo in termos}
+)
 
 
 @dataclass
@@ -135,13 +138,14 @@ class FeatureEngineer:
             return base
 
         flags = {}
-        termos_relevantes = sorted({termo for termos in PADROES_FEATURES_BASE.values() for termo in termos})
         for uid, grupo in timeline.groupby("ID_USUARIO"):
             flags[uid] = {
                 flag: self._match_any(grupo, termos)
                 for flag, termos in PADROES_FEATURES_BASE.items()
             }
-            flags[uid]["QTD_EVENTOS_MAMA"] = self._count_any(grupo, termos_relevantes)
+            flags[uid]["QTD_EVENTOS_MAMA"] = self._count_any(
+                grupo, TERMOS_RELEVANTES_BASE
+            )
 
         df_flags = (
             pd.DataFrame.from_dict(flags, orient="index")
@@ -193,7 +197,9 @@ class RiscoMamaPipeline:
             peso = self.cfg.peso(flag)
             score = score + (valor * peso)
             if peso:
-                motivos.append([f"{flag}({peso})" if ativo else "" for ativo in valor])
+                motivos.append(
+                    [f"{flag}({peso})" if ativo and peso else "" for ativo in valor]
+                )
 
         df["SCORE_RISCO_MAMA"] = score
         if motivos:
